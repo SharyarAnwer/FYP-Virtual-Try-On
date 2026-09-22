@@ -5,15 +5,93 @@
     android:id="@+id/main"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="#000000"
+    android:keepScreenOn="true"
     tools:context=".MainActivity">
 
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Hello World!"
+    <!-- Camera feed. Fills the screen; insets are applied to the chrome above it, not here. -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Drawing layer: framing guide now, pose skeleton from M1, garments from M3. -->
+    <com.shahryar.virtualtryon.OverlayView
+        android:id="@+id/overlayView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <!-- Top chrome. System-bar insets are applied to this container in MainActivity. -->
+    <FrameLayout
+        android:id="@+id/topBar"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <TextView
+            android:id="@+id/statsText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="start|top"
+            android:layout_margin="12dp"
+            android:background="#A6000000"
+            android:fontFamily="monospace"
+            android:lineSpacingExtra="2dp"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="9dp"
+            android:textColor="#EAF6F7"
+            android:textSize="12sp"
+            tools:text="FPS      29.8\nLATENCY   0.4 ms\nFRAME   480x640\nCAMERA     FRONT" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/switchButton"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end|top"
+            android:layout_margin="12dp"
+            android:text="@string/switch_camera" />
+    </FrameLayout>
+
+    <!-- Shown only when the camera permission has not been granted. -->
+    <LinearLayout
+        android:id="@+id/permissionPanel"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="vertical"
+        android:padding="32dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent"
+        tools:visibility="visible">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:gravity="center"
+            android:text="@string/camera_rationale"
+            android:textColor="#EAF6F7"
+            android:textSize="16sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/grantButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="@string/grant_camera" />
+    </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>
