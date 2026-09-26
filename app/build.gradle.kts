@@ -37,6 +37,12 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    androidResources {
+        // MediaPipe memory-maps the model straight out of the APK, which only works if
+        // the packager leaves it uncompressed.
+        noCompress.add("task")
+    }
 }
 
 dependencies {
@@ -51,6 +57,9 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+
+    // MediaPipe Tasks — pose landmark detection (M1).
+    implementation(libs.mediapipe.tasks.vision)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
