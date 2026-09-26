@@ -2,6 +2,11 @@ package com.shahryar.virtualtryon
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.RectF
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CaptureRequest
 import android.os.Bundle
@@ -18,23 +23,25 @@ import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraInfo
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import com.google.mediapipe.tasks.core.Delegate
 import com.shahryar.virtualtryon.databinding.ActivityMainBinding
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * M0 — foundation and performance harness.
+ * M1 — pose detection over the live camera stream.
  *
- * Brings up the camera preview, stacks a drawing layer over it, and reports frame rate and
- * per-frame latency continuously. No detection yet: M1 adds pose inference inside the analyzer
- * callback, and the numbers on screen will immediately show what it costs.
+ * The M0 harness is unchanged underneath: FPS and latency are still measured around the whole
+ * analyzer callback, so the numbers on screen now include the real cost of inference.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -45,14 +52,11 @@ class MainActivity : AppCompatActivity() {
         /**
          * Frame rate floor requested from the camera's auto-exposure controller.
          *
-         * Measured on the test device (Infinix Hot 40 Pro, front camera), delivery ranged from
-         * ~18 FPS in dim light to ~24.5 FPS in bright light, because auto-exposure lengthens the
-         * shutter to gather light and the frame rate follows. Pinning a floor caps exposure time,
-         * which keeps the rate steady at the cost of a darker image in dim rooms.
-         *
-         * The point is measurement integrity: with a moving frame rate, an FPS change in M1 could
-         * be the model or could be the weather outside. Raise or lower this to re-tune the
-         * brightness/frame-rate trade.
+         * This device advertises [10,10] [15,15] [5,20] [15,20] [20,20] [5,30] [30,30] — nothing
+         * between 20 and 30, so anything in 21..30 selects [30,30] and 20 selects [20,20].
+         * [30,30] caps exposure at ~33 ms, which fixed a lighting-dependent 18-24.5 FPS swing on
+         * the front camera at the cost of a darker image. If detection struggles in dim rooms,
+         * dropping to 20 buys a 50 ms exposure but leaves no frame-rate margin at all.
          */
         const val TARGET_MIN_FPS = 24
     }
@@ -65,6 +69,29 @@ class MainActivity : AppCompatActivity() {
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
     private var appliedFpsRange: Range<Int>? = null
 
+    /** Touched only on [analysisExecutor], which is single-threaded, so access is serialised. */
+    private var poseDetector: PoseDetector? = null
+    private var sourceBitmap: Bitmap? = null
+    private var uprightBitmap: Bitmap? = null
+    private var uprightCanvas: Canvas? = null
+    private val transform = Matrix()
+    private val transformedBounds = RectF()
+    private val blitPaint = Paint().apply {
+        isFilterBitmap = false
+        isAntiAlias = false
+    }
+    /**
+     * Measured on this device rather than assumed. On the Infinix Hot 40 Pro (Helio G99,
+     * Mali-G57 MC2) the CPU delegate runs inference in 39.9 ms against the GPU's 46.5 ms —
+     * the GPU is 14% slower, not faster. The MediaPipe log explains why: OpenCL fails to load
+     * and the delegate falls back to an ICD loader path that evidently accelerates nothing.
+     *
+     * The on-screen toggle still switches at runtime, so the comparison stays reproducible.
+     */
+    private var requestedDelegate = Delegate.CPU
+
+    @Volatile private var activeDelegate = "loading"
+    @Volatile private var poseTracked = false
     @Volatile private var frameWidth = 0
     @Volatile private var frameHeight = 0
     private var lastStatsAtMs = 0L
@@ -86,7 +113,10 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        // Insets go on the chrome, not the root: the preview should run edge to edge.
+        // OverlayView reproduces this scale type when mapping landmarks. Set explicitly rather
+        // than relying on the default, because the two have to agree.
+        binding.previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+
         ViewCompat.setOnApplyWindowInsetsListener(binding.topBar) { view, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             view.updatePadding(top = bars.top, left = bars.left, right = bars.right)
@@ -96,11 +126,14 @@ class MainActivity : AppCompatActivity() {
         analysisExecutor = Executors.newSingleThreadExecutor()
 
         binding.switchButton.setOnClickListener { toggleLens() }
+        binding.delegateButton.setOnClickListener { toggleDelegate() }
         binding.grantButton.setOnClickListener {
             cameraPermissionRequest.launch(Manifest.permission.CAMERA)
         }
 
+        updateDelegateButton()
         renderStats(0.0, 0.0, 0, 0)
+        loadDetector()
 
         if (hasCameraPermission()) {
             startCamera()
@@ -113,6 +146,24 @@ class MainActivity : AppCompatActivity() {
     private fun hasCameraPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Builds the detector on the analysis thread.
+     *
+     * Model loading takes long enough to stutter the UI, and running it on the same
+     * single-threaded executor as inference means it can never overlap a detect() call.
+     */
+    private fun loadDetector() {
+        analysisExecutor.execute {
+            poseDetector?.close()
+            val detector = PoseDetector.create(this, requestedDelegate)
+            poseDetector = detector
+            activeDelegate = detector.delegateName
+            perf.reset()
+            Log.i(TAG, "Pose detector ready on ${detector.delegateName}")
+            runOnUiThread { updateDelegateButton() }
+        }
+    }
 
     private fun startCamera() {
         val future = ProcessCameraProvider.getInstance(this)
@@ -132,9 +183,6 @@ class MainActivity : AppCompatActivity() {
 
         val previewBuilder = Preview.Builder()
 
-        // Pin the auto-exposure frame-rate range so the delivered rate stops drifting with
-        // ambient light. Applied to the preview builder because all use cases in a session
-        // share one repeating capture request.
         appliedFpsRange = chooseAeFpsRange(supportedAeFpsRanges())
         appliedFpsRange?.let { range ->
             Camera2Interop.Extender(previewBuilder).setCaptureRequestOption(
@@ -148,27 +196,14 @@ class MainActivity : AppCompatActivity() {
             it.surfaceProvider = binding.previewView.surfaceProvider
         }
 
-        // KEEP_ONLY_LATEST drops stale frames instead of queueing them. Without it, any frame
-        // that takes longer than the capture interval builds a backlog and latency grows without
-        // bound — the failure this project's 150 ms budget is most likely to hit in M1.
+        // RGBA_8888 so frames can be copied straight into a Bitmap. The default YUV_420_888
+        // would need a colour-space conversion on every frame before MediaPipe could use it.
         val analysis = ImageAnalysis.Builder()
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+            .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .build()
 
-        analysis.setAnalyzer(analysisExecutor) { imageProxy ->
-            perf.frameStarted()
-            try {
-                frameWidth = imageProxy.width
-                frameHeight = imageProxy.height
-
-                // M1: pose inference goes here. Everything around it already measures it.
-
-            } finally {
-                perf.frameFinished()
-                imageProxy.close()
-            }
-            publishStatsThrottled()
-        }
+        analysis.setAnalyzer(analysisExecutor, ::analyze)
 
         val selector = CameraSelector.Builder().requireLensFacing(lensFacing).build()
 
@@ -181,12 +216,89 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Runs on [analysisExecutor]. */
+    private fun analyze(imageProxy: ImageProxy) {
+        perf.frameStarted()
+        try {
+            // Staged timing: preparing the bitmap and running the model have entirely
+            // different fixes, so one combined number would say a frame is slow without
+            // saying which half to attack.
+            val startNs = System.nanoTime()
+            val upright = toUprightBitmap(imageProxy)
+            val preparedNs = System.nanoTime()
+
+            frameWidth = upright.width
+            frameHeight = upright.height
+
+            val landmarks = poseDetector
+                ?.detect(upright, SystemClock.uptimeMillis())
+                ?.landmarks()
+                ?.firstOrNull()
+
+            perf.recordPrep((preparedNs - startNs) / 1_000_000.0)
+            perf.recordInference((System.nanoTime() - preparedNs) / 1_000_000.0)
+
+            poseTracked = !landmarks.isNullOrEmpty()
+            binding.overlayView.setPose(landmarks, upright.width, upright.height)
+        } catch (e: Exception) {
+            Log.e(TAG, "Frame analysis failed", e)
+        } finally {
+            perf.frameFinished()
+            imageProxy.close()
+        }
+        publishStatsThrottled()
+    }
+
     /**
-     * Auto-exposure frame-rate ranges the currently selected camera advertises.
+     * Converts a camera frame into the orientation the user actually sees.
      *
-     * Requesting a range the camera does not advertise is either ignored or rejected, so the
-     * choice has to come from this list rather than from a hard-coded guess.
+     * Rotation and front-camera mirroring are applied here rather than corrected later, so the
+     * landmarks MediaPipe returns are already in on-screen orientation and OverlayView only has
+     * to undo the preview's scaling.
+     *
+     * Both bitmaps are allocated once and reused. The obvious version of this — letting
+     * Bitmap.createBitmap produce the rotated copy — allocates about 1.2 MB per frame, roughly
+     * 36 MB/s of garbage at 30 FPS, and the resulting collection pauses land directly on the
+     * frame rate this module is judged by.
+     *
+     * The destination rectangle is derived by mapping the source bounds through the transform
+     * and translating the result back to the origin, which is what createBitmap does internally.
+     * Deriving it beats hand-writing offsets for four rotations times two mirror states.
      */
+    private fun toUprightBitmap(imageProxy: ImageProxy): Bitmap {
+        val source = sourceBitmap?.takeIf {
+            it.width == imageProxy.width && it.height == imageProxy.height
+        } ?: Bitmap.createBitmap(imageProxy.width, imageProxy.height, Bitmap.Config.ARGB_8888)
+            .also { sourceBitmap = it }
+
+        imageProxy.planes[0].buffer.rewind()
+        source.copyPixelsFromBuffer(imageProxy.planes[0].buffer)
+
+        transform.reset()
+        transform.postRotate(imageProxy.imageInfo.rotationDegrees.toFloat())
+        if (lensFacing == CameraSelector.LENS_FACING_FRONT) transform.postScale(-1f, 1f)
+
+        transformedBounds.set(0f, 0f, source.width.toFloat(), source.height.toFloat())
+        transform.mapRect(transformedBounds)
+        transform.postTranslate(-transformedBounds.left, -transformedBounds.top)
+
+        val outWidth = Math.round(transformedBounds.width())
+        val outHeight = Math.round(transformedBounds.height())
+
+        val destination = uprightBitmap?.takeIf {
+            it.width == outWidth && it.height == outHeight
+        } ?: Bitmap.createBitmap(outWidth, outHeight, Bitmap.Config.ARGB_8888).also {
+            uprightBitmap = it
+            uprightCanvas = Canvas(it)
+        }
+
+        // The drawn image covers the destination exactly, so there is nothing to clear first.
+        // Every rotation is a multiple of 90 degrees, so sampling is pixel-aligned and filtering
+        // would cost time without changing a single pixel.
+        uprightCanvas?.drawBitmap(source, transform, blitPaint)
+        return destination
+    }
+
     @androidx.annotation.OptIn(ExperimentalCamera2Interop::class)
     private fun supportedAeFpsRanges(): List<Range<Int>> {
         val provider = cameraProvider ?: return emptyList()
@@ -199,28 +311,18 @@ class MainActivity : AppCompatActivity() {
                 Camera2CameraInfo.from(it)
                     .getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             }
-            val list = ranges?.toList().orEmpty()
-            Log.i(TAG, "Camera advertises AE FPS ranges: $list")
-            list
+            ranges?.toList().orEmpty().also { Log.i(TAG, "Camera advertises AE FPS ranges: $it") }
         } catch (e: Exception) {
             Log.w(TAG, "Could not read AE FPS ranges", e)
             emptyList()
         }
     }
 
-    /**
-     * Picks the advertised range that best guarantees [TARGET_MIN_FPS].
-     *
-     * Among ranges that already clear the floor, the one with the lowest ceiling wins — a wider
-     * ceiling invites the camera into a high-speed mode that can cost resolution or extra power
-     * without improving the floor, which is the only part being relied on here.
-     */
     private fun chooseAeFpsRange(ranges: List<Range<Int>>): Range<Int>? {
         if (ranges.isEmpty()) return null
         ranges.filter { it.lower >= TARGET_MIN_FPS }
             .minByOrNull { it.upper }
             ?.let { return it }
-        // Nothing reaches the floor: fall back to the strongest floor on offer.
         return ranges.maxByOrNull { it.lower * 1000 + it.upper }
     }
 
@@ -233,7 +335,22 @@ class MainActivity : AppCompatActivity() {
         bindUseCases()
     }
 
-    /** Stats are published a few times a second — per-frame UI updates would cost frames. */
+    /**
+     * Swaps the accelerator at runtime so GPU and CPU cost can be compared on the spot — that
+     * comparison is a result for the evaluation chapter, not just a tuning knob.
+     */
+    private fun toggleDelegate() {
+        requestedDelegate =
+            if (requestedDelegate == Delegate.GPU) Delegate.CPU else Delegate.GPU
+        activeDelegate = "loading"
+        updateDelegateButton()
+        loadDetector()
+    }
+
+    private fun updateDelegateButton() {
+        binding.delegateButton.text = requestedDelegate.name
+    }
+
     private fun publishStatsThrottled() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastStatsAtMs < STATS_INTERVAL_MS) return
@@ -250,15 +367,20 @@ class MainActivity : AppCompatActivity() {
         val lens = if (lensFacing == CameraSelector.LENS_FACING_FRONT) "FRONT" else "BACK"
         val resolution = if (w > 0 && h > 0) "${w}x$h" else "--"
         val aeRange = appliedFpsRange?.let { "${it.lower}-${it.upper}" } ?: "default"
+        val tracking = if (poseTracked) "TRACKED" else "none"
         binding.statsText.text = String.format(
             Locale.US,
-            "FPS      %8.1f\nLATENCY  %8.1f ms\nFRAME    %8s\nCAMERA   %8s\nAE LOCK  %8s",
-            fps, latencyMs, resolution, lens, aeRange
+            "FPS      %8.1f\nLATENCY  %8.1f ms\n  prep   %8.1f ms\n  infer  %8.1f ms\n" +
+                "FRAME    %8s\nCAMERA   %8s\nAE LOCK  %8s\nMODEL    %8s\n" +
+                "DELEGATE %8s\nPOSE     %8s",
+            fps, latencyMs, perf.prepMs, perf.inferenceMs,
+            resolution, lens, aeRange, "lite", activeDelegate, tracking
         )
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        analysisExecutor.execute { poseDetector?.close() }
         analysisExecutor.shutdown()
     }
 }

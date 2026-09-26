@@ -53,14 +53,29 @@
             android:textSize="12sp"
             tools:text="FPS      29.8\nLATENCY   0.4 ms\nFRAME   480x640\nCAMERA     FRONT" />
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/switchButton"
-            style="@style/Widget.Material3.Button.TonalButton"
+        <LinearLayout
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="end|top"
             android:layout_margin="12dp"
-            android:text="@string/switch_camera" />
+            android:gravity="end"
+            android:orientation="vertical">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/switchButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/switch_camera" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/delegateButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                tools:text="GPU" />
+        </LinearLayout>
     </FrameLayout>
 
     <!-- Shown only when the camera permission has not been granted. -->
