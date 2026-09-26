@@ -90,6 +90,9 @@ class MainActivity : AppCompatActivity() {
      */
     private var requestedDelegate = Delegate.CPU
 
+    private var garments: List<Garment> = emptyList()
+
+    @Volatile private var garmentCount = 0
     @Volatile private var activeDelegate = "loading"
     @Volatile private var poseTracked = false
     @Volatile private var frameWidth = 0
@@ -133,6 +136,7 @@ class MainActivity : AppCompatActivity() {
 
         updateDelegateButton()
         renderStats(0.0, 0.0, 0, 0)
+        loadGarments()
         loadDetector()
 
         if (hasCameraPermission()) {
@@ -146,6 +150,26 @@ class MainActivity : AppCompatActivity() {
     private fun hasCameraPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
             PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Reads the garment catalog off the analysis thread, since it touches asset files.
+     *
+     * Rejected garments are logged rather than thrown, so one bad entry cannot stop the app
+     * from starting — but the count on screen makes a silent rejection visible immediately.
+     */
+    private fun loadGarments() {
+        analysisExecutor.execute {
+            val loaded = GarmentCatalog.load(this)
+            garments = loaded
+            garmentCount = loaded.size
+            Log.i(TAG, "Garment catalog: ${loaded.size} loaded")
+            loaded.forEach { g ->
+                val flag = if (g.isPlaceholder) " [placeholder]" else ""
+                Log.i(TAG, "  ${g.id}: ${g.category}, ${g.colourName}, ${g.gender}, " +
+                    "${g.anchors.size} anchors, ${g.sizes.size} sizes$flag")
+            }
+        }
+    }
 
     /**
      * Builds the detector on the analysis thread.
@@ -372,9 +396,9 @@ class MainActivity : AppCompatActivity() {
             Locale.US,
             "FPS      %8.1f\nLATENCY  %8.1f ms\n  prep   %8.1f ms\n  infer  %8.1f ms\n" +
                 "FRAME    %8s\nCAMERA   %8s\nAE LOCK  %8s\nMODEL    %8s\n" +
-                "DELEGATE %8s\nPOSE     %8s",
+                "DELEGATE %8s\nPOSE     %8s\nGARMENTS %8d",
             fps, latencyMs, perf.prepMs, perf.inferenceMs,
-            resolution, lens, aeRange, "lite", activeDelegate, tracking
+            resolution, lens, aeRange, "lite", activeDelegate, tracking, garmentCount
         )
     }
 
