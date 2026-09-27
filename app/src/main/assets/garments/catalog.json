@@ -12,11 +12,11 @@
       "anchors": {
         "left_shoulder": {
           "x": 172,
-          "y": 110
+          "y": 144
         },
         "right_shoulder": {
           "x": 340,
-          "y": 110
+          "y": 144
         },
         "left_hip": {
           "x": 152,
@@ -85,11 +85,11 @@
       "anchors": {
         "left_shoulder": {
           "x": 172,
-          "y": 110
+          "y": 144
         },
         "right_shoulder": {
           "x": 340,
-          "y": 110
+          "y": 144
         },
         "left_hip": {
           "x": 152,
@@ -157,11 +157,11 @@
       "anchors": {
         "left_shoulder": {
           "x": 172,
-          "y": 110
+          "y": 144
         },
         "right_shoulder": {
           "x": 340,
-          "y": 110
+          "y": 144
         },
         "left_hip": {
           "x": 152,

@@ -46,8 +46,24 @@ RIGHT_HEM = (CENTRE_X + HEM_HALF, HEM_Y)
 # shoulder seam falls on a real torso. Anchoring the seam to the joint therefore squeezes the
 # whole garment inward, and the shirt renders narrower than the body wearing it.
 SHOULDER_ANCHOR_INSET = 24
-LEFT_SHOULDER_ANCHOR = (CENTRE_X - SHOULDER_HALF + SHOULDER_ANCHOR_INSET, SHOULDER_Y)
-RIGHT_SHOULDER_ANCHOR = (CENTRE_X + SHOULDER_HALF - SHOULDER_ANCHOR_INSET, SHOULDER_Y)
+
+# The same joint-versus-surface gap applies vertically: the joint centre sits a few centimetres
+# below the top of the shoulder, so anchoring the drawn shoulder line to the joint left the
+# shirt hanging low. Measured on device, the top of the shoulder sat ~43 screen px above the
+# joint.
+#
+# Converting that to artwork pixels needs the *vertical* scale of the transform, not the
+# horizontal one. The affine stretches the two axes independently — on the test subject about
+# 2.1 screen px per artwork px across the shoulders but only ~1.3 down the torso. A first attempt
+# used the horizontal factor, chose 20, and closed only ~60% of the gap. Solving with the vertical
+# scale, which the drop itself raises slightly by shortening the shoulder-to-hip span, gives 34.
+#
+# Because the two scales depend on the wearer's shoulder-to-torso proportions, this value is
+# tuned to one tester. Broader or longer-bodied users will see the shoulder line sit a little
+# differently.
+SHOULDER_ANCHOR_DROP = 34
+LEFT_SHOULDER_ANCHOR = (CENTRE_X - SHOULDER_HALF + SHOULDER_ANCHOR_INSET, SHOULDER_Y + SHOULDER_ANCHOR_DROP)
+RIGHT_SHOULDER_ANCHOR = (CENTRE_X + SHOULDER_HALF - SHOULDER_ANCHOR_INSET, SHOULDER_Y + SHOULDER_ANCHOR_DROP)
 
 # Likewise the hem is not the hip. A shirt falls past the hip joint, so the anchor sits above
 # the drawn hem and the remaining fabric hangs below the landmark, as it would on a body.
