@@ -91,6 +91,10 @@ class MainActivity : AppCompatActivity() {
     private var requestedDelegate = Delegate.CPU
 
     private var garments: List<Garment> = emptyList()
+    private val garmentBitmaps = mutableMapOf<String, Bitmap>()
+
+    /** Index into [garments]; -1 shows no garment. */
+    private var selectedGarment = -1
 
     @Volatile private var garmentCount = 0
     @Volatile private var activeDelegate = "loading"
@@ -130,11 +134,13 @@ class MainActivity : AppCompatActivity() {
 
         binding.switchButton.setOnClickListener { toggleLens() }
         binding.delegateButton.setOnClickListener { toggleDelegate() }
+        binding.garmentButton.setOnClickListener { cycleGarment() }
         binding.grantButton.setOnClickListener {
             cameraPermissionRequest.launch(Manifest.permission.CAMERA)
         }
 
         updateDelegateButton()
+        updateGarmentButton()
         renderStats(0.0, 0.0, 0, 0)
         loadGarments()
         loadDetector()
@@ -163,6 +169,7 @@ class MainActivity : AppCompatActivity() {
             garments = loaded
             garmentCount = loaded.size
             Log.i(TAG, "Garment catalog: ${loaded.size} loaded")
+            runOnUiThread { updateGarmentButton() }
             loaded.forEach { g ->
                 val flag = if (g.isPlaceholder) " [placeholder]" else ""
                 Log.i(TAG, "  ${g.id}: ${g.category}, ${g.colourName}, ${g.gender}, " +
@@ -357,6 +364,39 @@ class MainActivity : AppCompatActivity() {
             CameraSelector.LENS_FACING_FRONT
         }
         bindUseCases()
+    }
+
+    /**
+     * Steps through the catalog: none, then each garment, then back to none.
+     *
+     * Artwork is decoded on the analysis thread and cached by id. Decoding a 512x640 PNG takes
+     * long enough to drop a frame if done on the UI thread, and the cache means switching back
+     * to a garment costs nothing the second time.
+     */
+    private fun cycleGarment() {
+        if (garments.isEmpty()) return
+        selectedGarment = if (selectedGarment + 1 >= garments.size) -1 else selectedGarment + 1
+        updateGarmentButton()
+
+        val chosen = garments.getOrNull(selectedGarment)
+        if (chosen == null) {
+            binding.overlayView.setGarment(null, null)
+            return
+        }
+
+        analysisExecutor.execute {
+            val bitmap = garmentBitmaps.getOrPut(chosen.id) {
+                GarmentCatalog.loadBitmap(this, chosen) ?: return@execute
+            }
+            runOnUiThread { binding.overlayView.setGarment(bitmap, chosen) }
+        }
+    }
+
+    private fun updateGarmentButton() {
+        val chosen = garments.getOrNull(selectedGarment)
+        binding.garmentButton.text = chosen?.colourName?.replaceFirstChar { it.uppercase() }
+            ?: getString(R.string.garment_none)
+        binding.garmentButton.isEnabled = garments.isNotEmpty()
     }
 
     /**

@@ -33,10 +33,43 @@ HEM_HALF = 104
 WAIST_Y = 300
 WAIST_HALF = 98
 
+# Where the garment is *drawn*.
 LEFT_SHOULDER = (CENTRE_X - SHOULDER_HALF, SHOULDER_Y)
 RIGHT_SHOULDER = (CENTRE_X + SHOULDER_HALF, SHOULDER_Y)
 LEFT_HEM = (CENTRE_X - HEM_HALF, HEM_Y)
 RIGHT_HEM = (CENTRE_X + HEM_HALF, HEM_Y)
+
+# Where the garment is *anchored*, which is not the same thing.
+#
+# An anchor answers "which body landmark should this point of the artwork sit on", and
+# MediaPipe's shoulder landmark is the joint centre — measurably inboard of where a shirt's
+# shoulder seam falls on a real torso. Anchoring the seam to the joint therefore squeezes the
+# whole garment inward, and the shirt renders narrower than the body wearing it.
+SHOULDER_ANCHOR_INSET = 24
+
+# The same joint-versus-surface gap applies vertically: the joint centre sits a few centimetres
+# below the top of the shoulder, so anchoring the drawn shoulder line to the joint left the
+# shirt hanging low. Measured on device, the top of the shoulder sat ~43 screen px above the
+# joint.
+#
+# Converting that to artwork pixels needs the *vertical* scale of the transform, not the
+# horizontal one. The affine stretches the two axes independently — on the test subject about
+# 2.1 screen px per artwork px across the shoulders but only ~1.3 down the torso. A first attempt
+# used the horizontal factor, chose 20, and closed only ~60% of the gap. Solving with the vertical
+# scale, which the drop itself raises slightly by shortening the shoulder-to-hip span, gives 34.
+#
+# Because the two scales depend on the wearer's shoulder-to-torso proportions, this value is
+# tuned to one tester. Broader or longer-bodied users will see the shoulder line sit a little
+# differently.
+SHOULDER_ANCHOR_DROP = 34
+LEFT_SHOULDER_ANCHOR = (CENTRE_X - SHOULDER_HALF + SHOULDER_ANCHOR_INSET, SHOULDER_Y + SHOULDER_ANCHOR_DROP)
+RIGHT_SHOULDER_ANCHOR = (CENTRE_X + SHOULDER_HALF - SHOULDER_ANCHOR_INSET, SHOULDER_Y + SHOULDER_ANCHOR_DROP)
+
+# Likewise the hem is not the hip. A shirt falls past the hip joint, so the anchor sits above
+# the drawn hem and the remaining fabric hangs below the landmark, as it would on a body.
+HIP_ANCHOR_Y = 540
+LEFT_HIP_ANCHOR = (CENTRE_X - HEM_HALF, HIP_ANCHOR_Y)
+RIGHT_HIP_ANCHOR = (CENTRE_X + HEM_HALF, HIP_ANCHOR_Y)
 
 OUT_DIR = os.path.join("app", "src", "main", "assets", "garments")
 
@@ -65,25 +98,26 @@ def body_polygon():
 
 
 def short_sleeve():
+    """Angled down about 35 degrees, matching arms at rest."""
     return [
         LEFT_SHOULDER,
-        (62, 178),
-        (94, 262),
-        (168, 228),
-        (CENTRE_X - SHOULDER_HALF + 12, SHOULDER_Y + 44),
+        (96, 166),
+        (116, 288),
+        (186, 274),
+        (CENTRE_X - SHOULDER_HALF + 14, SHOULDER_Y + 48),
     ]
 
 
 def long_sleeve():
     return [
         LEFT_SHOULDER,
-        (62, 178),
-        (52, 306),
-        (84, 438),
-        (136, 430),
-        (140, 302),
-        (168, 214),
-        (CENTRE_X - SHOULDER_HALF + 12, SHOULDER_Y + 44),
+        (96, 166),
+        (74, 322),
+        (104, 452),
+        (152, 442),
+        (154, 318),
+        (186, 236),
+        (CENTRE_X - SHOULDER_HALF + 14, SHOULDER_Y + 48),
     ]
 
 
@@ -192,10 +226,10 @@ def main():
             "imageWidth": CANVAS_W,
             "imageHeight": CANVAS_H,
             "anchors": {
-                "left_shoulder": {"x": LEFT_SHOULDER[0], "y": LEFT_SHOULDER[1]},
-                "right_shoulder": {"x": RIGHT_SHOULDER[0], "y": RIGHT_SHOULDER[1]},
-                "left_hip": {"x": LEFT_HEM[0], "y": LEFT_HEM[1]},
-                "right_hip": {"x": RIGHT_HEM[0], "y": RIGHT_HEM[1]},
+                "left_shoulder": {"x": LEFT_SHOULDER_ANCHOR[0], "y": LEFT_SHOULDER_ANCHOR[1]},
+                "right_shoulder": {"x": RIGHT_SHOULDER_ANCHOR[0], "y": RIGHT_SHOULDER_ANCHOR[1]},
+                "left_hip": {"x": LEFT_HIP_ANCHOR[0], "y": LEFT_HIP_ANCHOR[1]},
+                "right_hip": {"x": RIGHT_HIP_ANCHOR[0], "y": RIGHT_HIP_ANCHOR[1]},
             },
             "colour": spec["colour"],
             "gender": spec["gender"],
