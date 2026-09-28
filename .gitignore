@@ -15,3 +15,5 @@
 local.properties
 /.idea/studiobot.xml
 /tools/garment_preview.png
+/tools/garment_articulation.png
+__pycache__/
