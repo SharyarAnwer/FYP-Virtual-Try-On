@@ -10,12 +10,13 @@ import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
+import kotlin.math.hypot
 
 /**
  * Transparent drawing layer stacked above the camera preview.
  *
- * Draws the warped garment (M3) and the pose skeleton (M1). When no pose is detected it falls
- * back to the standing guide, so the screen is never blank.
+ * Draws the garment (M3, articulated in M3.5) and the pose skeleton (M1). When no pose is
+ * detected it falls back to the standing guide, so the screen is never blank.
  *
  * ## The coordinate problem this class exists to solve
  *
@@ -44,11 +45,17 @@ class OverlayView @JvmOverloads constructor(
         /** Stride of the packed landmark snapshot: x, y, visibility. */
         const val STRIDE = 3
 
-        // MediaPipe pose landmark indices used to place an upper-body garment.
+        // MediaPipe pose landmark indices used to place the torso layer.
         const val LEFT_SHOULDER = 11
         const val RIGHT_SHOULDER = 12
         const val LEFT_HIP = 23
         const val RIGHT_HIP = 24
+
+        /**
+         * Length of the perpendicular used as a segment's third control point, in artwork px.
+         * Only its direction and scale matter; a larger reach keeps the triangle well conditioned.
+         */
+        const val PERPENDICULAR_REACH = 64f
 
         /**
          * Exponential smoothing applied to landmark positions: 1.0 follows the model exactly,
@@ -75,6 +82,32 @@ class OverlayView @JvmOverloads constructor(
             23, 25, 25, 27, 27, 29, 27, 31, 29, 31,
             24, 26, 26, 28, 28, 30, 28, 32, 30, 32
         )
+    }
+
+    /**
+     * Everything needed to draw one garment, resolved once when it is selected so that onDraw
+     * does no name lookups and no allocation. Immutable after construction, so swapping the
+     * whole object is the only way the drawing thread ever sees a change.
+     */
+    private class GarmentRender(garment: Garment, layers: GarmentLayers) {
+        val fills: List<Bitmap> = layers.fills
+        val outlines: List<Bitmap?> = layers.outlines
+        val seams: List<Bitmap?> = layers.seams
+        val count = garment.parts.size
+        val isTorso = BooleanArray(count) { garment.parts[it].kind == PartKind.TORSO }
+        val fromLandmark = IntArray(count) { PoseLandmarks.indexOf(garment.parts[it].from) }
+        val toLandmark = IntArray(count) { PoseLandmarks.indexOf(garment.parts[it].to) }
+        val fromAnchor = Array(count) { garment.anchor(garment.parts[it].from) }
+        val toAnchor = Array(count) { garment.anchor(garment.parts[it].to) }
+        val parentIndex = IntArray(count) { i ->
+            garment.parts.indexOfFirst { it.name == garment.parts[i].parent }
+        }
+        val matrices = Array(count) { Matrix() }
+
+        val leftShoulder = garment.anchor("left_shoulder")
+        val rightShoulder = garment.anchor("right_shoulder")
+        val leftHip = garment.anchor("left_hip")
+        val rightHip = garment.anchor("right_hip")
     }
 
     private val density = resources.displayMetrics.density
@@ -116,9 +149,12 @@ class OverlayView @JvmOverloads constructor(
     private val jointRadius = 3.5f * density
     private val mapping = FloatArray(3)
 
-    private val garmentMatrix = Matrix()
-    private val srcTriangle = FloatArray(6)
-    private val dstTriangle = FloatArray(6)
+    private val torsoMatrix = Matrix()
+    private val torsoInverse = Matrix()
+    private val matrixValues = FloatArray(9)
+    private val vector = FloatArray(2)
+    private val src = FloatArray(6)
+    private val dst = FloatArray(6)
 
     /** Immutable snapshot written by the analysis thread, read by the UI thread. */
     @Volatile private var pose: FloatArray? = null
@@ -128,13 +164,19 @@ class OverlayView @JvmOverloads constructor(
     /** Previous smoothed frame. Analysis thread only. */
     private var previous: FloatArray? = null
 
-    @Volatile private var garmentBitmap: Bitmap? = null
-    @Volatile private var garment: Garment? = null
+    @Volatile private var render: GarmentRender? = null
 
-    /** Sets the garment to render, or clears it when either argument is null. */
-    fun setGarment(bitmap: Bitmap?, garment: Garment?) {
-        this.garmentBitmap = bitmap
-        this.garment = garment
+    /**
+     * Sets the garment to render, or clears it when either argument is null. [layers] must be in
+     * the same order as [Garment.parts].
+     */
+    fun setGarment(layers: GarmentLayers?, garment: Garment?) {
+        render = if (layers != null && garment != null && layers.fills.size == garment.parts.size &&
+            layers.outlines.size == garment.parts.size && layers.seams.size == garment.parts.size) {
+            GarmentRender(garment, layers)
+        } else {
+            null
+        }
         postInvalidate()
     }
 
@@ -201,51 +243,138 @@ class OverlayView @JvmOverloads constructor(
     private fun viewX(p: FloatArray, index: Int) = p[index * STRIDE] * imageWidth * mapping[0] + mapping[1]
     private fun viewY(p: FloatArray, index: Int) = p[index * STRIDE + 1] * imageHeight * mapping[0] + mapping[2]
     private fun visible(p: FloatArray, index: Int) =
-        index * STRIDE + 2 < p.size && p[index * STRIDE + 2] >= MIN_VISIBILITY
+        index >= 0 && index * STRIDE + 2 < p.size && p[index * STRIDE + 2] >= MIN_VISIBILITY
 
     /**
-     * Warps the garment onto the body and draws it. Returns whether anything was drawn.
+     * Draws the garment. Returns whether anything was drawn.
      *
-     * Three point pairs, so [Matrix.setPolyToPoly] produces an **affine** transform: the garment
-     * scales with shoulder width, scales independently with torso length, rotates with the
-     * shoulder line, and shears as the torso leans. Two pairs would give a rigid similarity that
-     * ignores torso length; four would give a perspective transform that follows a twist more
-     * closely but visibly wobbles as landmarks jitter. Affine is the stable middle, and it is
-     * what the proposal specifies.
+     * Four passes: every limb outline, then the torso, then every limb fill, then every seam. A
+     * limb's outline is its silhouette grown by a few px, so whatever is drawn over it covers it —
+     * the torso where a sleeve overlaps the chest, its own fill everywhere inside. What survives is
+     * an outline only where a limb is the garment's outer edge. Drawing each limb with its own
+     * outline, on top of the torso, put a line across the chest wherever a sleeve overlapped it.
      *
-     * The hip midpoint is used rather than both hips because two shoulders plus one hip point
-     * define the triangle exactly — adding the fourth would over-constrain an affine fit.
+     * That rule cannot tell the chest from the underarm, so it also hid the one edge that should
+     * show over the body: a long sleeve's inside edge below the armpit, which made the sleeve fuse
+     * into the shirt like a batwing. Seams put exactly that edge back, drawn last.
+     *
+     * The torso uses M3's affine: both shoulders and the hip midpoint define the triangle, so the
+     * garment scales with shoulder width and torso length independently. Each other layer is a
+     * segment that follows its own two landmarks — see [segmentMatrix] — and falls back to its
+     * parent's transform when those landmarks are not visible, which leaves the part in its rest
+     * position on the body instead of letting it vanish.
+     *
+     * The whole garment still needs the torso's four landmarks. Without them there is nothing to
+     * hang the limbs from.
      */
     private fun drawGarment(canvas: Canvas, p: FloatArray): Boolean {
-        val bitmap = garmentBitmap ?: return false
-        val g = garment ?: return false
+        val r = render ?: return false
+        if (!visible(p, LEFT_SHOULDER) || !visible(p, RIGHT_SHOULDER) ||
+            !visible(p, LEFT_HIP) || !visible(p, RIGHT_HIP)) return false
 
-        val required = intArrayOf(LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)
-        if (required.any { !visible(p, it) }) return false
+        val ls = r.leftShoulder ?: return false
+        val rs = r.rightShoulder ?: return false
+        val lh = r.leftHip ?: return false
+        val rh = r.rightHip ?: return false
 
-        val leftShoulder = g.anchor("left_shoulder") ?: return false
-        val rightShoulder = g.anchor("right_shoulder") ?: return false
-        val leftHip = g.anchor("left_hip") ?: return false
-        val rightHip = g.anchor("right_hip") ?: return false
+        src[0] = ls.x; src[1] = ls.y
+        src[2] = rs.x; src[3] = rs.y
+        src[4] = (lh.x + rh.x) / 2f; src[5] = (lh.y + rh.y) / 2f
 
-        srcTriangle[0] = leftShoulder.x
-        srcTriangle[1] = leftShoulder.y
-        srcTriangle[2] = rightShoulder.x
-        srcTriangle[3] = rightShoulder.y
-        srcTriangle[4] = (leftHip.x + rightHip.x) / 2f
-        srcTriangle[5] = (leftHip.y + rightHip.y) / 2f
+        dst[0] = viewX(p, LEFT_SHOULDER); dst[1] = viewY(p, LEFT_SHOULDER)
+        dst[2] = viewX(p, RIGHT_SHOULDER); dst[3] = viewY(p, RIGHT_SHOULDER)
+        dst[4] = (viewX(p, LEFT_HIP) + viewX(p, RIGHT_HIP)) / 2f
+        dst[5] = (viewY(p, LEFT_HIP) + viewY(p, RIGHT_HIP)) / 2f
 
-        dstTriangle[0] = viewX(p, LEFT_SHOULDER)
-        dstTriangle[1] = viewY(p, LEFT_SHOULDER)
-        dstTriangle[2] = viewX(p, RIGHT_SHOULDER)
-        dstTriangle[3] = viewY(p, RIGHT_SHOULDER)
-        dstTriangle[4] = (viewX(p, LEFT_HIP) + viewX(p, RIGHT_HIP)) / 2f
-        dstTriangle[5] = (viewY(p, LEFT_HIP) + viewY(p, RIGHT_HIP)) / 2f
+        if (!torsoMatrix.setPolyToPoly(src, 0, dst, 0, 3)) return false
+        if (!torsoMatrix.invert(torsoInverse)) return false
 
-        if (!garmentMatrix.setPolyToPoly(srcTriangle, 0, dstTriangle, 0, 3)) return false
+        // If the torso transform mirrors the artwork, every limb must mirror with it, or a
+        // sleeve's outer edge would end up facing the body.
+        torsoMatrix.getValues(matrixValues)
+        val det = matrixValues[Matrix.MSCALE_X] * matrixValues[Matrix.MSCALE_Y] -
+            matrixValues[Matrix.MSKEW_X] * matrixValues[Matrix.MSKEW_Y]
+        val handedness = if (det >= 0f) 1f else -1f
 
-        canvas.drawBitmap(bitmap, garmentMatrix, garmentPaint)
+        for (i in 0 until r.count) {
+            val m = r.matrices[i]
+            if (r.isTorso[i]) {
+                m.set(torsoMatrix)
+            } else if (!segmentMatrix(r, i, p, handedness, m)) {
+                val parent = r.parentIndex[i]
+                m.set(if (parent >= 0) r.matrices[parent] else torsoMatrix)
+            }
+        }
+
+        for (i in 0 until r.count) {
+            if (!r.isTorso[i]) r.outlines[i]?.let { canvas.drawBitmap(it, r.matrices[i], garmentPaint) }
+        }
+        for (i in 0 until r.count) {
+            if (r.isTorso[i]) canvas.drawBitmap(r.fills[i], r.matrices[i], garmentPaint)
+        }
+        for (i in 0 until r.count) {
+            if (!r.isTorso[i]) canvas.drawBitmap(r.fills[i], r.matrices[i], garmentPaint)
+        }
+        for (i in 0 until r.count) {
+            r.seams[i]?.let { canvas.drawBitmap(it, r.matrices[i], garmentPaint) }
+        }
         return true
+    }
+
+    /**
+     * Builds the transform for one limb layer. Returns false when its landmarks are not usable.
+     *
+     * Length follows the limb, width follows the body. Along the axis from pivot to far end, the
+     * part stretches to the wearer's actual segment length. Across it, the part scales with the
+     * torso's stretch *in that same direction*: the torso transform is anisotropic — on the test
+     * subject 2.1 screen px per artwork px across the shoulders but 1.3 down the torso — and a
+     * sleeve's width runs horizontally when the arm hangs but vertically when it is raised. Using
+     * the horizontal scale throughout made a raised sleeve ~60% too thick; reading the scale along
+     * the actual perpendicular, k = 1 / |T⁻¹·d|, keeps it the thickness of the shirt it belongs to.
+     *
+     * The same step-for-step maths lives in tools/preview_garments.py, which is how poses were
+     * checked before reaching a phone. Change the two together.
+     */
+    private fun segmentMatrix(r: GarmentRender, i: Int, p: FloatArray, handedness: Float, out: Matrix): Boolean {
+        val from = r.fromLandmark[i]
+        val to = r.toLandmark[i]
+        if (!visible(p, from) || !visible(p, to)) return false
+        val a0 = r.fromAnchor[i] ?: return false
+        val a1 = r.toAnchor[i] ?: return false
+
+        val ax = a1.x - a0.x
+        val ay = a1.y - a0.y
+        val artLength = hypot(ax, ay)
+
+        val v0x = viewX(p, from)
+        val v0y = viewY(p, from)
+        val vx = viewX(p, to) - v0x
+        val vy = viewY(p, to) - v0y
+        val viewLength = hypot(vx, vy)
+        if (artLength < 1f || viewLength < 1f) return false
+
+        // Unit perpendicular to the limb on screen, turned the same way the torso is.
+        val dx = handedness * -vy / viewLength
+        val dy = handedness * vx / viewLength
+
+        vector[0] = dx
+        vector[1] = dy
+        torsoInverse.mapVectors(vector)
+        val inverseLength = hypot(vector[0], vector[1])
+        if (inverseLength < 1e-6f) return false
+        val widthScale = 1f / inverseLength
+
+        src[0] = a0.x; src[1] = a0.y
+        src[2] = a1.x; src[3] = a1.y
+        src[4] = a0.x - ay / artLength * PERPENDICULAR_REACH
+        src[5] = a0.y + ax / artLength * PERPENDICULAR_REACH
+
+        dst[0] = v0x; dst[1] = v0y
+        dst[2] = v0x + vx; dst[3] = v0y + vy
+        dst[4] = v0x + dx * PERPENDICULAR_REACH * widthScale
+        dst[5] = v0y + dy * PERPENDICULAR_REACH * widthScale
+
+        return out.setPolyToPoly(src, 0, dst, 0, 3)
     }
 
     /**

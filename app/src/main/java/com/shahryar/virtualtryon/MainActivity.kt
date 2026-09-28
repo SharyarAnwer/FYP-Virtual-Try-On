@@ -91,7 +91,7 @@ class MainActivity : AppCompatActivity() {
     private var requestedDelegate = Delegate.CPU
 
     private var garments: List<Garment> = emptyList()
-    private val garmentBitmaps = mutableMapOf<String, Bitmap>()
+    private val garmentLayers = mutableMapOf<String, GarmentLayers>()
 
     /** Index into [garments]; -1 shows no garment. */
     private var selectedGarment = -1
@@ -173,7 +173,7 @@ class MainActivity : AppCompatActivity() {
             loaded.forEach { g ->
                 val flag = if (g.isPlaceholder) " [placeholder]" else ""
                 Log.i(TAG, "  ${g.id}: ${g.category}, ${g.colourName}, ${g.gender}, " +
-                    "${g.anchors.size} anchors, ${g.sizes.size} sizes$flag")
+                    "${g.parts.size} layers, ${g.anchors.size} anchors, ${g.sizes.size} sizes$flag")
             }
         }
     }
@@ -369,9 +369,9 @@ class MainActivity : AppCompatActivity() {
     /**
      * Steps through the catalog: none, then each garment, then back to none.
      *
-     * Artwork is decoded on the analysis thread and cached by id. Decoding a 512x640 PNG takes
-     * long enough to drop a frame if done on the UI thread, and the cache means switching back
-     * to a garment costs nothing the second time.
+     * Every layer is decoded on the analysis thread and cached by garment id. Decoding several
+     * 512x640 PNGs takes long enough to drop frames if done on the UI thread, and the cache means
+     * switching back to a garment costs nothing the second time.
      */
     private fun cycleGarment() {
         if (garments.isEmpty()) return
@@ -385,10 +385,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         analysisExecutor.execute {
-            val bitmap = garmentBitmaps.getOrPut(chosen.id) {
-                GarmentCatalog.loadBitmap(this, chosen) ?: return@execute
+            val layers = garmentLayers.getOrPut(chosen.id) {
+                GarmentCatalog.loadLayers(this, chosen) ?: return@execute
             }
-            runOnUiThread { binding.overlayView.setGarment(bitmap, chosen) }
+            runOnUiThread { binding.overlayView.setGarment(layers, chosen) }
         }
     }
 
