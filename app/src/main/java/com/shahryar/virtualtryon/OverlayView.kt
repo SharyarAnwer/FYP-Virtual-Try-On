@@ -6,17 +6,21 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.View
 import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
+import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.hypot
 
 /**
  * Transparent drawing layer stacked above the camera preview.
  *
- * Draws the garment (M3, articulated in M3.5) and the pose skeleton (M1). When no pose is
- * detected it falls back to the standing guide, so the screen is never blank.
+ * Draws the garment (M3, articulated in M3.5) and the pose skeleton (M1). The garment is kept
+ * behind the wearer's chin. When no pose is detected it falls back to the standing guide, so the
+ * screen is never blank.
  *
  * ## The coordinate problem this class exists to solve
  *
@@ -50,6 +54,45 @@ class OverlayView @JvmOverloads constructor(
         const val RIGHT_SHOULDER = 12
         const val LEFT_HIP = 23
         const val RIGHT_HIP = 24
+        const val LEFT_ELBOW = 13
+        const val RIGHT_ELBOW = 14
+
+        // Face landmarks used to keep the garment behind the chin.
+        const val LEFT_EYE = 2
+        const val RIGHT_EYE = 5
+        const val LEFT_EAR = 7
+        const val RIGHT_EAR = 8
+        const val MOUTH_LEFT = 9
+        const val MOUTH_RIGHT = 10
+
+        /**
+         * How far below the mouth the chin reaches, in eye-to-mouth distances. The pose model has
+         * no chin point, so the jaw is estimated as an oval from ear to ear whose lowest point is
+         * this far below the mouth. 1.2 reaches the bottom of the tester's beard; a clean-shaven
+         * chin sits higher, nearer 0.8, where this hides a little of the collar's back that the
+         * neck would actually show. Tuned on one person, like [FIXED_TORSO_EASE].
+         */
+        const val CHIN_DROP = 1.2f
+
+        /**
+         * The jaw oval's half-width, as a fraction of half the distance between the ear landmarks.
+         * The pose model puts its ear points inside the face outline, about a third of the way in
+         * from the real ears: on device an oval only as wide as them left the collar's corners
+         * showing either side of the beard. 1.5 brings it out to the actual jaw.
+         */
+        const val JAW_WIDTH = 1.5f
+
+        /**
+         * Fixed widening of a real garment's torso below the armpits: 18% wider than the
+         * shoulder-joint distance alone would make it.
+         *
+         * Measured on device in a fitted undershirt, the unwidened polo left 12-20 px of the
+         * undershirt showing down each side - 13-16% of the shirt's width - because the tester's
+         * torso is broader relative to his shoulders than a single ratio assumes. 0.18 covers that
+         * with a small margin. It is tuned on one person and is the one number to replace when
+         * torso width is measured live (M6).
+         */
+        const val FIXED_TORSO_EASE = 0.18f
 
         /**
          * Length of the perpendicular used as a segment's third control point, in artwork px.
@@ -110,6 +153,47 @@ class OverlayView @JvmOverloads constructor(
         val rightHip = garment.anchor("right_hip")
     }
 
+    /**
+     * Everything needed to draw one mesh garment (M3.6). Bone matrices and vertex buffers are
+     * allocated here, once, and reused every frame.
+     */
+    private class MeshRender(
+        val front: Bitmap,
+        val sleeves: Bitmap,
+        val mesh: GarmentMesh,
+        val leftShoulder: Anchor,
+        val rightShoulder: Anchor,
+        val leftHip: Anchor,
+        val rightHip: Anchor,
+        val leftElbow: Anchor,
+        val rightElbow: Anchor
+    ) {
+        /** Torso, left sleeve, right sleeve — the order of [GarmentMesh.weights]. */
+        val bones = Array(GarmentMesh.BONES) { Matrix() }
+        val placed = Array(GarmentMesh.BONES) { FloatArray(mesh.vertexCount * 2) }
+        val vertices = FloatArray(mesh.vertexCount * 2)
+
+        /** Widening per grid row. A flat fixed profile for now; a measured one later. */
+        val easeAmount = FloatArray(mesh.rows + 1) { FIXED_TORSO_EASE }
+        val widened = FloatArray(mesh.vertexCount * 2)
+
+        companion object {
+            fun from(garment: Garment, layers: GarmentLayers): MeshRender? {
+                return MeshRender(
+                    front = layers.meshFront ?: return null,
+                    sleeves = layers.meshSleeves ?: return null,
+                    mesh = layers.mesh ?: return null,
+                    leftShoulder = garment.anchor("left_shoulder") ?: return null,
+                    rightShoulder = garment.anchor("right_shoulder") ?: return null,
+                    leftHip = garment.anchor("left_hip") ?: return null,
+                    rightHip = garment.anchor("right_hip") ?: return null,
+                    leftElbow = garment.anchor("left_elbow") ?: return null,
+                    rightElbow = garment.anchor("right_elbow") ?: return null
+                )
+            }
+        }
+    }
+
     private val density = resources.displayMetrics.density
 
     private val bonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -156,6 +240,11 @@ class OverlayView @JvmOverloads constructor(
     private val src = FloatArray(6)
     private val dst = FloatArray(6)
 
+    /** The region the chin and jaw cover, in view coordinates; see [computeFace]. */
+    private val facePath = Path()
+    private val faceOval = RectF()
+    private val faceMatrix = Matrix()
+
     /** Immutable snapshot written by the analysis thread, read by the UI thread. */
     @Volatile private var pose: FloatArray? = null
     @Volatile private var imageWidth = 0
@@ -167,16 +256,34 @@ class OverlayView @JvmOverloads constructor(
     @Volatile private var render: GarmentRender? = null
 
     /**
+     * Whether to draw the pose skeleton. Off by default: drawn over a garment, its lines and
+     * joints are the clearest possible signal that the shirt is an overlay rather than something
+     * worn. It stays available for checking alignment, which is what it is for.
+     */
+    @Volatile var showSkeleton: Boolean = false
+        set(value) {
+            field = value
+            postInvalidate()
+        }
+    @Volatile private var meshRender: MeshRender? = null
+
+    /**
      * Sets the garment to render, or clears it when either argument is null. [layers] must be in
      * the same order as [Garment.parts].
      */
     fun setGarment(layers: GarmentLayers?, garment: Garment?) {
-        render = if (layers != null && garment != null && layers.fills.size == garment.parts.size &&
-            layers.outlines.size == garment.parts.size && layers.seams.size == garment.parts.size) {
-            GarmentRender(garment, layers)
-        } else {
-            null
+        var layered: GarmentRender? = null
+        var meshed: MeshRender? = null
+        if (layers != null && garment != null) {
+            if (garment.render == RenderKind.MESH) {
+                meshed = MeshRender.from(garment, layers)
+            } else if (layers.fills.size == garment.parts.size &&
+                layers.outlines.size == garment.parts.size && layers.seams.size == garment.parts.size) {
+                layered = GarmentRender(garment, layers)
+            }
         }
+        render = layered
+        meshRender = meshed
         postInvalidate()
     }
 
@@ -225,8 +332,69 @@ class OverlayView @JvmOverloads constructor(
         }
 
         computeMapping()
+        val faceSeen = computeFace(snapshot)
+        val checkpoint = canvas.save()
+        if (faceSeen) canvas.clipOutPath(facePath)
         val wearingGarment = drawGarment(canvas, snapshot)
-        drawSkeleton(canvas, snapshot, dimmed = wearingGarment)
+        canvas.restoreToCount(checkpoint)
+        if (showSkeleton) {
+            drawSkeleton(canvas, snapshot, dimmed = wearingGarment)
+            if (faceSeen) canvas.drawPath(facePath, bonePaint)
+        }
+    }
+
+    /**
+     * Sets [facePath] to the region the wearer's chin and jaw cover. Returns false when the face
+     * is not seen clearly enough to place it, and then nothing is hidden.
+     *
+     * The garment is drawn over the camera image, so it covers everything it overlaps. A real
+     * shirt's collar stands up around the neck, and drawn on top it covered the tester's jaw and
+     * beard up to his mouth. On a person the chin is in front of the collar, so the garment is
+     * clipped out of this region.
+     *
+     * The region is an oval centred between the ears, as wide as they are apart, reaching
+     * [CHIN_DROP] below the mouth. Its axis runs perpendicular to the line between the ears,
+     * which tilts with the head and is a longer, steadier baseline than eyes to mouth. The eyes
+     * and mouth only say which way is down and how long the face is.
+     */
+    private fun computeFace(p: FloatArray): Boolean {
+        if (!visible(p, LEFT_EAR) || !visible(p, RIGHT_EAR) || !visible(p, LEFT_EYE) ||
+            !visible(p, RIGHT_EYE) || !visible(p, MOUTH_LEFT) || !visible(p, MOUTH_RIGHT)) return false
+
+        val earX = (viewX(p, LEFT_EAR) + viewX(p, RIGHT_EAR)) / 2f
+        val earY = (viewY(p, LEFT_EAR) + viewY(p, RIGHT_EAR)) / 2f
+        val acrossX = viewX(p, RIGHT_EAR) - viewX(p, LEFT_EAR)
+        val acrossY = viewY(p, RIGHT_EAR) - viewY(p, LEFT_EAR)
+        val earSpan = hypot(acrossX, acrossY)
+        if (earSpan < 1f) return false
+
+        val eyeX = (viewX(p, LEFT_EYE) + viewX(p, RIGHT_EYE)) / 2f
+        val eyeY = (viewY(p, LEFT_EYE) + viewY(p, RIGHT_EYE)) / 2f
+        val mouthX = (viewX(p, MOUTH_LEFT) + viewX(p, MOUTH_RIGHT)) / 2f
+        val mouthY = (viewY(p, MOUTH_LEFT) + viewY(p, MOUTH_RIGHT)) / 2f
+
+        // Down the face: perpendicular to the ear line, on the mouth's side of the eyes.
+        var downX = -acrossY / earSpan
+        var downY = acrossX / earSpan
+        val eyeToMouth = (mouthX - eyeX) * downX + (mouthY - eyeY) * downY
+        if (eyeToMouth < 0f) {
+            downX = -downX
+            downY = -downY
+        }
+        val faceLength = abs(eyeToMouth)
+        if (faceLength < 1f) return false
+
+        val depth = (mouthX - earX) * downX + (mouthY - earY) * downY + CHIN_DROP * faceLength
+        if (depth <= 0f) return false
+        val halfWidth = earSpan / 2f * JAW_WIDTH
+
+        faceOval.set(-halfWidth, -depth, halfWidth, depth)
+        facePath.rewind()
+        facePath.addOval(faceOval, Path.Direction.CW)
+        faceMatrix.setRotate(Math.toDegrees(atan2(downY, downX).toDouble()).toFloat() - 90f)
+        faceMatrix.postTranslate(earX, earY)
+        facePath.transform(faceMatrix)
+        return true
     }
 
     /**
@@ -268,39 +436,21 @@ class OverlayView @JvmOverloads constructor(
      * hang the limbs from.
      */
     private fun drawGarment(canvas: Canvas, p: FloatArray): Boolean {
-        val r = render ?: return false
         if (!visible(p, LEFT_SHOULDER) || !visible(p, RIGHT_SHOULDER) ||
             !visible(p, LEFT_HIP) || !visible(p, RIGHT_HIP)) return false
+        meshRender?.let { return drawMeshGarment(canvas, p, it) }
 
-        val ls = r.leftShoulder ?: return false
-        val rs = r.rightShoulder ?: return false
-        val lh = r.leftHip ?: return false
-        val rh = r.rightHip ?: return false
-
-        src[0] = ls.x; src[1] = ls.y
-        src[2] = rs.x; src[3] = rs.y
-        src[4] = (lh.x + rh.x) / 2f; src[5] = (lh.y + rh.y) / 2f
-
-        dst[0] = viewX(p, LEFT_SHOULDER); dst[1] = viewY(p, LEFT_SHOULDER)
-        dst[2] = viewX(p, RIGHT_SHOULDER); dst[3] = viewY(p, RIGHT_SHOULDER)
-        dst[4] = (viewX(p, LEFT_HIP) + viewX(p, RIGHT_HIP)) / 2f
-        dst[5] = (viewY(p, LEFT_HIP) + viewY(p, RIGHT_HIP)) / 2f
-
-        if (!torsoMatrix.setPolyToPoly(src, 0, dst, 0, 3)) return false
-        if (!torsoMatrix.invert(torsoInverse)) return false
-
-        // If the torso transform mirrors the artwork, every limb must mirror with it, or a
-        // sleeve's outer edge would end up facing the body.
-        torsoMatrix.getValues(matrixValues)
-        val det = matrixValues[Matrix.MSCALE_X] * matrixValues[Matrix.MSCALE_Y] -
-            matrixValues[Matrix.MSKEW_X] * matrixValues[Matrix.MSKEW_Y]
-        val handedness = if (det >= 0f) 1f else -1f
+        val r = render ?: return false
+        val handedness = computeTorso(p, r.leftShoulder ?: return false, r.rightShoulder ?: return false,
+            r.leftHip ?: return false, r.rightHip ?: return false)
+        if (handedness == 0f) return false
 
         for (i in 0 until r.count) {
             val m = r.matrices[i]
             if (r.isTorso[i]) {
                 m.set(torsoMatrix)
-            } else if (!segmentMatrix(r, i, p, handedness, m)) {
+            } else if (!segmentMatrix(r.fromAnchor[i], r.toAnchor[i], r.fromLandmark[i],
+                    r.toLandmark[i], p, handedness, m)) {
                 val parent = r.parentIndex[i]
                 m.set(if (parent >= 0) r.matrices[parent] else torsoMatrix)
             }
@@ -322,7 +472,84 @@ class OverlayView @JvmOverloads constructor(
     }
 
     /**
-     * Builds the transform for one limb layer. Returns false when its landmarks are not usable.
+     * Sets [torsoMatrix] and [torsoInverse] from the torso anchors: both shoulders and the hip
+     * midpoint, so the garment scales with shoulder width and torso length independently (M3).
+     *
+     * Returns the transform's handedness — -1 if it mirrors the artwork, which every limb must then
+     * copy or a sleeve's outer edge would end up facing the body — or 0 if it is unusable.
+     */
+    private fun computeTorso(p: FloatArray, ls: Anchor, rs: Anchor, lh: Anchor, rh: Anchor): Float {
+        src[0] = ls.x; src[1] = ls.y
+        src[2] = rs.x; src[3] = rs.y
+        src[4] = (lh.x + rh.x) / 2f; src[5] = (lh.y + rh.y) / 2f
+
+        dst[0] = viewX(p, LEFT_SHOULDER); dst[1] = viewY(p, LEFT_SHOULDER)
+        dst[2] = viewX(p, RIGHT_SHOULDER); dst[3] = viewY(p, RIGHT_SHOULDER)
+        dst[4] = (viewX(p, LEFT_HIP) + viewX(p, RIGHT_HIP)) / 2f
+        dst[5] = (viewY(p, LEFT_HIP) + viewY(p, RIGHT_HIP)) / 2f
+
+        if (!torsoMatrix.setPolyToPoly(src, 0, dst, 0, 3)) return 0f
+        if (!torsoMatrix.invert(torsoInverse)) return 0f
+
+        torsoMatrix.getValues(matrixValues)
+        val det = matrixValues[Matrix.MSCALE_X] * matrixValues[Matrix.MSCALE_Y] -
+            matrixValues[Matrix.MSKEW_X] * matrixValues[Matrix.MSKEW_Y]
+        return if (det >= 0f) 1f else -1f
+    }
+
+    /**
+     * Draws a real garment photo bent over its grid (M3.6). Returns whether anything was drawn.
+     *
+     * Three bones — torso, left sleeve, right sleeve — are computed exactly as for layered
+     * garments. Each grid vertex then moves to the weighted blend of where each bone would put it,
+     * so the photo bends smoothly across the armhole instead of breaking at a cut. A sleeve whose
+     * elbow is out of sight simply follows the torso, leaving it at rest on the body.
+     *
+     * Two passes: the whole garment, then only its sleeves again on top. A bent mesh draws its
+     * triangles in grid order, so without the second pass the body could land over a sleeve
+     * wherever the two overlap.
+     *
+     * Mirrors render() in tools/preview_mesh.py. Change the two together.
+     */
+    private fun drawMeshGarment(canvas: Canvas, p: FloatArray, m: MeshRender): Boolean {
+        val handedness = computeTorso(p, m.leftShoulder, m.rightShoulder, m.leftHip, m.rightHip)
+        if (handedness == 0f) return false
+
+        m.bones[0].set(torsoMatrix)
+        if (!segmentMatrix(m.leftShoulder, m.leftElbow, LEFT_SHOULDER, LEFT_ELBOW, p, handedness, m.bones[1])) {
+            m.bones[1].set(torsoMatrix)
+        }
+        if (!segmentMatrix(m.rightShoulder, m.rightElbow, RIGHT_SHOULDER, RIGHT_ELBOW, p, handedness, m.bones[2])) {
+            m.bones[2].set(torsoMatrix)
+        }
+
+        m.mesh.widen(m.easeAmount, m.widened)
+        for (k in 0 until GarmentMesh.BONES) m.bones[k].mapPoints(m.placed[k], m.widened)
+
+        val w = m.mesh.weights
+        val t = m.placed[0]
+        val l = m.placed[1]
+        val r = m.placed[2]
+        val out = m.vertices
+        for (v in 0 until m.mesh.vertexCount) {
+            val wt = w[v * 3]
+            val wl = w[v * 3 + 1]
+            val wr = w[v * 3 + 2]
+            val x = v * 2
+            out[x] = wt * t[x] + wl * l[x] + wr * r[x]
+            out[x + 1] = wt * t[x + 1] + wl * l[x + 1] + wr * r[x + 1]
+        }
+
+        val cols = m.mesh.cols
+        val rows = m.mesh.rows
+        canvas.drawBitmapMesh(m.front, cols, rows, out, 0, null, 0, garmentPaint)
+        canvas.drawBitmapMesh(m.sleeves, cols, rows, out, 0, null, 0, garmentPaint)
+        return true
+    }
+
+    /**
+     * Builds the transform for one limb, from its anchors [a0] -> [a1] on the artwork to its
+     * landmarks [from] -> [to] on the body. Returns false when either is not usable.
      *
      * Length follows the limb, width follows the body. Along the axis from pivot to far end, the
      * part stretches to the wearer's actual segment length. Across it, the part scales with the
@@ -335,12 +562,11 @@ class OverlayView @JvmOverloads constructor(
      * The same step-for-step maths lives in tools/preview_garments.py, which is how poses were
      * checked before reaching a phone. Change the two together.
      */
-    private fun segmentMatrix(r: GarmentRender, i: Int, p: FloatArray, handedness: Float, out: Matrix): Boolean {
-        val from = r.fromLandmark[i]
-        val to = r.toLandmark[i]
+    private fun segmentMatrix(
+        a0: Anchor?, a1: Anchor?, from: Int, to: Int, p: FloatArray, handedness: Float, out: Matrix
+    ): Boolean {
+        if (a0 == null || a1 == null) return false
         if (!visible(p, from) || !visible(p, to)) return false
-        val a0 = r.fromAnchor[i] ?: return false
-        val a1 = r.toAnchor[i] ?: return false
 
         val ax = a1.x - a0.x
         val ay = a1.y - a0.y

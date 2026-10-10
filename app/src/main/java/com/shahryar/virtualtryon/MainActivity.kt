@@ -135,12 +135,17 @@ class MainActivity : AppCompatActivity() {
         binding.switchButton.setOnClickListener { toggleLens() }
         binding.delegateButton.setOnClickListener { toggleDelegate() }
         binding.garmentButton.setOnClickListener { cycleGarment() }
+        binding.skeletonButton.setOnClickListener {
+            binding.overlayView.showSkeleton = !binding.overlayView.showSkeleton
+            updateSkeletonButton()
+        }
         binding.grantButton.setOnClickListener {
             cameraPermissionRequest.launch(Manifest.permission.CAMERA)
         }
 
         updateDelegateButton()
         updateGarmentButton()
+        updateSkeletonButton()
         renderStats(0.0, 0.0, 0, 0)
         loadGarments()
         loadDetector()
@@ -390,6 +395,12 @@ class MainActivity : AppCompatActivity() {
             }
             runOnUiThread { binding.overlayView.setGarment(layers, chosen) }
         }
+    }
+
+    private fun updateSkeletonButton() {
+        binding.skeletonButton.setText(
+            if (binding.overlayView.showSkeleton) R.string.skeleton_on else R.string.skeleton_off
+        )
     }
 
     private fun updateGarmentButton() {

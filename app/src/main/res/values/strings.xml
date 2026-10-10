@@ -5,4 +5,6 @@
     <string name="camera_rationale">This app needs the camera to show garments on you in real time.</string>
     <string name="camera_denied">Camera access is off. Turn it on in Settings › Apps › Virtual Try On › Permissions.</string>
     <string name="garment_none">No shirt</string>
+    <string name="skeleton_on">Skeleton on</string>
+    <string name="skeleton_off">Skeleton off</string>
 </resources>
