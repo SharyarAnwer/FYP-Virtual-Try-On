@@ -8,9 +8,17 @@ import kotlin.math.roundToInt
 /**
  * Where a garment's sleeve meets its body on one side, found in the photo by
  * tools/garment_points.py: the shoulder tip, the armpit, and a point below the armpit that
- * steers the boundary between the hanging cuff and the body side.
+ * steers the boundary between the hanging cuff and the body side. The cuff hem's two ends give
+ * the sleeve its own centre line and width; garments catalogued before they were recorded lack
+ * them, and their sleeves fall back to following the shoulder-to-elbow anchors.
  */
-data class Armhole(val shoulder: Anchor, val armpit: Anchor, val below: Anchor)
+data class Armhole(
+    val shoulder: Anchor,
+    val armpit: Anchor,
+    val below: Anchor,
+    val cuffOuter: Anchor? = null,
+    val cuffInner: Anchor? = null
+)
 
 /**
  * One side's sleeve/torso boundary: shoulder tip -> armpit -> below, extended as rays past both
@@ -96,6 +104,31 @@ class GarmentMesh(garment: Garment) {
         /** Grid cell size in artwork px. Fine enough for several vertices across the blend band. */
         const val CELL = 16f
 
+        /**
+         * Most grid vertices a garment may use; a larger photo gets larger cells instead.
+         *
+         * The test phone's GPU driver crashed the app (SIGSEGV in a memcpy inside the Mali
+         * driver, called from drawBitmapMesh) on the first real shirt photo: 1178 px wide, so
+         * 4,875 vertices at 16 px cells, 78 KB of vertex data. The crash registers showed it
+         * copying 4,876 vertices - one past the end. The polo, 3,185 vertices and 51 KB, never
+         * crashed: an over-read is harmless inside a small allocation, and fatal at the end of a
+         * large one, which Android places against an unmapped guard page. 3,600 keeps every
+         * garment below 64 KB, the size proven on device.
+         */
+        const val MAX_VERTICES = 3600
+
+        /** The cell size for an image: [CELL], grown until the grid fits [MAX_VERTICES]. */
+        fun cellFor(width: Int, height: Int): Float {
+            var cell = CELL
+            while ((cells(width, cell) + 1) * (cells(height, cell) + 1) > MAX_VERTICES) cell += 1f
+            return cell
+        }
+
+        private fun cells(length: Int, cell: Float) = max(1, (length / cell).roundToInt())
+
+        /** See [torsoWidth]: the narrowing from one row to the next that marks the hem. */
+        const val HEM_DROP = 0.1f
+
         /** Blend half-width either side of the armhole, as a fraction of shoulder-joint width. */
         const val BLEND = 0.06f
 
@@ -118,8 +151,10 @@ class GarmentMesh(garment: Garment) {
         }
     }
 
-    val cols: Int = max(1, (garment.imageWidth / CELL).roundToInt())
-    val rows: Int = max(1, (garment.imageHeight / CELL).roundToInt())
+    /** Cell size actually used, in artwork px. */
+    val cell: Float = cellFor(garment.imageWidth, garment.imageHeight)
+    val cols: Int = cells(garment.imageWidth, cell)
+    val rows: Int = cells(garment.imageHeight, cell)
     val vertexCount = (cols + 1) * (rows + 1)
 
     /** Rest-pose vertex positions, x and y interleaved, spread evenly over the whole bitmap as
@@ -159,6 +194,26 @@ class GarmentMesh(garment: Garment) {
      */
     val easeWeights = FloatArray(vertexCount)
 
+    /** Each grid row's height on the torso: 0 on the shoulder anchors' line, 1 on the hips'. */
+    val rowT = FloatArray(rows + 1)
+
+    /**
+     * Width of the garment's body at each grid row, in artwork px: between its outermost body
+     * pixels - opaque and on the torso side of both armholes - or 0 if the row has none. Filled
+     * by [measureTorso].
+     *
+     * Outermost pixels rather than a walk out from the centre line: a shirt's front panels can
+     * part at the hem below the last button, and a walk stopped at that gap, measuring the hem
+     * row at half its width.
+     *
+     * A row more than [HEM_DROP] narrower than the row above takes that row's width. Going down a
+     * garment, a sharp narrowing is the hem rounding off or the empty rows past it, not its cut,
+     * and fitting those rows to the wearer pulled the hem's bottom edge out of line: rows past
+     * the hem got no fitting, so the strip drawn between them and the hem stayed photo-width, and
+     * a rounded hem's last row was widened extra to make up its missing width.
+     */
+    val torsoWidth = FloatArray(rows + 1)
+
     init {
         val jointWidth = garment.anchor("right_shoulder")!!.x - garment.anchor("left_shoulder")!!.x
         val band = BLEND * jointWidth
@@ -166,8 +221,11 @@ class GarmentMesh(garment: Garment) {
 
         val shoulderY = (garment.anchor("left_shoulder")!!.y + garment.anchor("right_shoulder")!!.y) / 2f
         val armpitY = (garment.armholes.getValue("left").armpit.y + garment.armholes.getValue("right").armpit.y) / 2f
+        val hipY = (garment.anchor("left_hip")!!.y + garment.anchor("right_hip")!!.y) / 2f
         for (r in 0..rows) {
-            easeRamp[r] = smoothstep(shoulderY, armpitY, r * garment.imageHeight.toFloat() / rows)
+            val y = r * garment.imageHeight.toFloat() / rows
+            easeRamp[r] = smoothstep(shoulderY, armpitY, y)
+            rowT[r] = (y - shoulderY) / (hipY - shoulderY)
         }
         var v = 0
         for (r in 0..rows) {
@@ -197,16 +255,16 @@ class GarmentMesh(garment: Garment) {
     /**
      * Writes into [out] the grid positions to skin from: [source] with the torso widened.
      *
-     * [amount] holds one widening fraction per grid row (0.18 = 18% wider), scaled by
-     * [easeRamp]. Each vertex moves away from the centre line in proportion to its [easeWeights]
-     * entry, so the torso widens and carries the inner part of each sleeve with it, while the rest
-     * of each sleeve is left to its own bone.
+     * [amount] holds one widening fraction per grid row (0.18 = 18% wider, -0.2 = 20% narrower),
+     * scaled by [easeRamp]. Each vertex moves away from the centre line in proportion to its
+     * [easeWeights] entry, so the torso widens or narrows and carries the inner part of each
+     * sleeve with it, while the rest of each sleeve is left to its own bone.
      *
      * The amount is an input on purpose. The garment's width otherwise comes only from the
-     * distance between the shoulder joints, and bodies vary widely in how broad they are below
-     * the shoulders. Today the caller passes a fixed profile tuned on the test subject; the
-     * adaptive version measures the wearer's torso each frame and passes that instead, with
-     * nothing here changing.
+     * distance between the shoulder joints, which says nothing about how broad the wearer is
+     * below them, nor how a photo was taken: a flat-laid shirt shows its whole front spread out,
+     * far wider than it looks worn. The overlay passes, per row, whatever makes the garment's body
+     * as wide as the wearer's torso, measured live by [BodyWidthMeter].
      *
      * Mirrors widen() in tools/preview_mesh.py. Change them together.
      */
@@ -221,6 +279,31 @@ class GarmentMesh(garment: Garment) {
                 out[v * 2 + 1] = source[v * 2 + 1]
             }
         }
+    }
+
+    /** Fills [torsoWidth] from the garment photo. Call once, when the garment is loaded. */
+    fun measureTorso(photo: Bitmap) {
+        val w = photo.width
+        val pixels = IntArray(w)
+        for (r in 0..rows) {
+            val y = (r * photo.height / rows).coerceAtMost(photo.height - 1)
+            photo.getPixels(pixels, 0, w, 0, y, w, 1)
+            val py = y + 0.5f
+            var lo = 0
+            while (lo < w && !isBody(pixels, lo, py)) lo++
+            var hi = w - 1
+            while (hi > lo && !isBody(pixels, hi, py)) hi--
+            val width = if (lo < w) (hi - lo + 1).toFloat() else 0f
+            val above = if (r > 0) torsoWidth[r - 1] else 0f
+            torsoWidth[r] = if (width < (1f - HEM_DROP) * above) above else width
+        }
+    }
+
+    /** Whether pixel [x] of a row at height [py] is the garment's body: opaque, not sleeve. */
+    private fun isBody(row: IntArray, x: Int, py: Float): Boolean {
+        if (row[x] ushr 24 < 128) return false
+        val px = x + 0.5f
+        return left.signedDistance(px, py) < 0f && right.signedDistance(px, py) < 0f
     }
 
     /**

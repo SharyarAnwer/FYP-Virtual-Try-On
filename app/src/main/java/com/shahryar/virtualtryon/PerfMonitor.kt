@@ -25,6 +25,8 @@ class PerfMonitor(private val windowSize: Int = 30) {
     private val latenciesMs = ArrayDeque<Double>()
     private val prepMsWindow = ArrayDeque<Double>()
     private val inferMsWindow = ArrayDeque<Double>()
+    private val unpackMsWindow = ArrayDeque<Double>()
+    private val measureMsWindow = ArrayDeque<Double>()
     private var frameStartNs = 0L
 
     /** Frames per second over the recent window. */
@@ -47,6 +49,16 @@ class PerfMonitor(private val windowSize: Int = 30) {
     var inferenceMs: Double = 0.0
         private set
 
+    /** Mean time spent unpacking the person mask from the model's result. */
+    @Volatile
+    var unpackMs: Double = 0.0
+        private set
+
+    /** Mean time spent measuring the body's width on the mask. */
+    @Volatile
+    var measureMs: Double = 0.0
+        private set
+
     /** Total frames processed since the last reset. */
     @Volatile
     var frameCount: Long = 0L
@@ -65,6 +77,16 @@ class PerfMonitor(private val windowSize: Int = 30) {
     /** Time spent inside the pose model. */
     fun recordInference(ms: Double) {
         inferenceMs = push(inferMsWindow, ms)
+    }
+
+    /** Time spent unpacking the person mask. */
+    fun recordUnpack(ms: Double) {
+        unpackMs = push(unpackMsWindow, ms)
+    }
+
+    /** Time spent measuring the body on the mask. */
+    fun recordMeasure(ms: Double) {
+        measureMs = push(measureMsWindow, ms)
     }
 
     /** Call once all per-frame work is done, before releasing the frame. */
@@ -96,10 +118,14 @@ class PerfMonitor(private val windowSize: Int = 30) {
         latenciesMs.clear()
         prepMsWindow.clear()
         inferMsWindow.clear()
+        unpackMsWindow.clear()
+        measureMsWindow.clear()
         frameCount = 0L
         fps = 0.0
         latencyMs = 0.0
         prepMs = 0.0
         inferenceMs = 0.0
+        unpackMs = 0.0
+        measureMs = 0.0
     }
 }

@@ -2,17 +2,29 @@
 Turns a garment photo on a plain background into app-ready cut-outs.
 
     python tools/prepare_garment.py SOURCE --id polo_pink [--views 2] [--height 1024]
-                                    [--out app/src/main/assets/garments/real]
+                                    [--tolerance N] [--out app/src/main/assets/garments/real]
 
 --views 2 means the source holds two views side by side, front on the left and back on the
 right, as many product images do. Each view is written as <id>_front.png / <id>_back.png, on one
 shared canvas size with every view top-aligned and centred, so M5.5 can switch between them
 without the garment jumping.
 
-Background removal assumes a plain, roughly uniform background, estimated from the image
-border. It keeps only background that is *connected to the border*: white buttons, a white
-logo or a light collar lining inside the garment stay opaque, which a plain colour key would
-have punched holes through.
+Background removal assumes a plain background in one colour, estimated from the image border.
+It keeps only background that is *connected to the border*: white buttons, a white logo or a
+light collar lining inside the garment stay opaque, which a plain colour key would have punched
+holes through.
+
+The background need not be smooth. A shirt photographed flat on a bedsheet sits on a woven
+texture with creases, whose pixels stray far from the sheet's average colour; with a fixed
+tolerance of 24, most of the sheet survived as speckle. So pixels are classified on a
+median-filtered copy, which flattens the weave but keeps edges sharp; the tolerance is chosen
+per photo, at the valley between the background and garment colours (Otsu's method on the
+distance from the background colour); and only the largest pieces are kept - one per view -
+which drops any specks of sheet that are left.
+
+A source that is already cut out - a PNG with real transparency - is used as it is: its own alpha
+is the matte, and only the largest pieces are kept. Flattening it onto a background first made a
+black shirt on a transparent background indistinguishable from it.
 
 Edges are matted rather than thresholded. An edge pixel is a blend of garment and background,
 so its alpha is how far it lies along the line from background colour to garment colour, and
@@ -26,7 +38,10 @@ import os
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
 
-BG_TOLERANCE = 24          # RGB distance from the background colour still counted as background
+# Lowest RGB distance from the background colour counted as garment. The actual tolerance is
+# chosen per photo (see auto_tolerance) and never goes below this.
+BG_TOLERANCE = 24
+CLASSIFY_MEDIAN = 5        # median filter size for classifying pixels; flattens fabric weave
 # Garment pixels within this many px of the background get a matted alpha rather than a solid
 # one. 2 was too narrow: where a cuff touches the body the gap between them tapers to a point,
 # and pixels at the tip - a blend of shadowed crease and background - sat more than 2 px from
@@ -53,10 +68,55 @@ def connected_background(near_bg):
     return (np.asarray(image) == 128)[1:-1, 1:-1]
 
 
-def matte(rgb, bg_colour):
-    near_bg = np.linalg.norm(rgb - bg_colour, axis=2) < BG_TOLERANCE
-    background = connected_background(near_bg)
-    garment = ~background
+def colour_distance(rgb, bg_colour):
+    """Distance of each pixel from the background colour, on a median-filtered copy."""
+    smooth = Image.fromarray(rgb.astype(np.uint8), "RGB").filter(ImageFilter.MedianFilter(CLASSIFY_MEDIAN))
+    return np.linalg.norm(np.asarray(smooth, np.float32) - bg_colour, axis=2)
+
+
+def auto_tolerance(distance):
+    """Otsu's threshold on the distance map: the valley between background and garment."""
+    hist, edges = np.histogram(distance, bins=256, range=(0.0, float(distance.max()) + 1e-3))
+    hist = hist.astype(np.float64)
+    centres = (edges[:-1] + edges[1:]) / 2
+    weight_bg = np.cumsum(hist)
+    weight_fg = weight_bg[-1] - weight_bg
+    sum_bg = np.cumsum(hist * centres)
+    mean_bg = sum_bg / np.maximum(weight_bg, 1)
+    mean_fg = (sum_bg[-1] - sum_bg) / np.maximum(weight_fg, 1)
+    between = weight_bg * weight_fg * (mean_bg - mean_fg) ** 2
+    return max(BG_TOLERANCE, float(edges[int(np.argmax(between)) + 1]))
+
+
+def largest_pieces(garment, count):
+    """
+    The `count` largest connected pieces of `garment` - one per view - so specks go.
+
+    Keeping only the piece nearest the photo's centre broke front-and-back images: the centre is
+    the gap between the views, and the back view was thrown away.
+    """
+    if not garment.any():
+        raise SystemExit("no garment found - is the background plain?")
+    remaining = garment.copy()
+    pieces = []
+    while remaining.any():
+        ys, xs = np.nonzero(remaining)
+        image = Image.fromarray(np.where(remaining, 255, 0).astype(np.uint8), "L").copy()
+        ImageDraw.floodfill(image, (int(xs[0]), int(ys[0])), 128)
+        piece = np.asarray(image) == 128
+        pieces.append(piece)
+        remaining &= ~piece
+    pieces.sort(key=lambda m: int(m.sum()), reverse=True)
+    out = np.zeros_like(garment)
+    for piece in pieces[:count]:
+        out |= piece
+    return out
+
+
+def matte(rgb, bg_colour, tolerance, views=1):
+    near_bg = colour_distance(rgb, bg_colour) < tolerance
+    garment = largest_pieces(~connected_background(near_bg), views)
+    background = ~garment
 
     def dilate(mask, radius):
         img = Image.fromarray((mask * 255).astype(np.uint8), "L")
@@ -141,12 +201,27 @@ def main():
     ap.add_argument("--id", required=True)
     ap.add_argument("--views", type=int, default=2, choices=(1, 2))
     ap.add_argument("--height", type=int, default=1024)
+    ap.add_argument("--tolerance", type=float, default=None,
+                    help="RGB distance from the background still counted as background; "
+                         "chosen per photo when omitted")
     ap.add_argument("--out", default=os.path.join("app", "src", "main", "assets", "garments", "real"))
     args = ap.parse_args()
 
-    rgb = np.asarray(Image.open(args.source).convert("RGB"), np.float32)
-    bg = background_colour(rgb)
-    cutout = matte(rgb, bg)
+    source = Image.open(args.source)
+    if source.mode in ("RGBA", "LA", "PA") or "transparency" in source.info:
+        rgba = np.asarray(source.convert("RGBA")).copy()
+        keep = largest_pieces(rgba[..., 3] > 128, args.views)
+        # Keep the soft edge pixels around each kept piece; drop everything else.
+        near = np.asarray(Image.fromarray((keep * 255).astype(np.uint8), "L")
+                          .filter(ImageFilter.MaxFilter(2 * EDGE_BAND + 1))) > 127
+        rgba[..., 3] = np.where(near, rgba[..., 3], 0)
+        cutout = Image.fromarray(rgba, "RGBA")
+        bg = tolerance = None
+    else:
+        rgb = np.asarray(source.convert("RGB"), np.float32)
+        bg = background_colour(rgb)
+        tolerance = args.tolerance if args.tolerance is not None else auto_tolerance(colour_distance(rgb, bg))
+        cutout = matte(rgb, bg, tolerance, args.views)
     views = compose(split_views(cutout, args.views), args.height)
 
     os.makedirs(args.out, exist_ok=True)
@@ -156,7 +231,11 @@ def main():
         view.save(path, "PNG")
         coverage = (np.asarray(view.getchannel("A")) > 0).mean()
         print(f"wrote {path}  {view.width}x{view.height}  garment covers {coverage:.0%} of canvas")
-    print(f"background colour estimated as RGB({bg[0]:.0f}, {bg[1]:.0f}, {bg[2]:.0f})")
+    if bg is None:
+        print("source already transparent: its own alpha used as the matte")
+    else:
+        print(f"background colour estimated as RGB({bg[0]:.0f}, {bg[1]:.0f}, {bg[2]:.0f}), "
+              f"tolerance {tolerance:.0f}")
 
 
 if __name__ == "__main__":

@@ -38,9 +38,26 @@ REAL = os.path.join("app", "src", "main", "assets", "garments", "real")
 # Grid cell size in artwork px, and blend half-width as a fraction of shoulder-joint width.
 # Both mirrored in OverlayView.kt.
 MESH_CELL = 16
+# Most grid vertices allowed; larger photos get larger cells (GarmentMesh.MAX_VERTICES, which
+# explains the GPU driver crash this avoids).
+MAX_VERTICES = 3600
 BLEND = 0.06
-# Fixed torso widening below the armpits (FIXED_TORSO_EASE in OverlayView.kt).
-TORSO_EASE = 0.18
+# The app fits each garment row to the wearer's torso width, measured live (BodyWidthMeter +
+# OverlayView.fitToBody). The preview has no wearer, so it stands in a torso this many times the
+# shoulder-joint width at every height - about what the tester measured with arms down, in a
+# loose top - and fits to that the same way.
+BODY_WIDTH_PER_JOINT = 1.25
+# OverlayView.fitAllowance and its limits.
+FIT_ALLOWANCE = {"slim": 1.03, "regular": 1.08, "loose": 1.15}
+MIN_EASE, MAX_EASE = -0.6, 1.0
+
+# Sleeves are centred on the arm and drawn this many arm-widths wide, by fit style. The arm is
+# taken as 0.24 shoulder-joint widths (BodyWidthMeter.ARM_HALF_WIDTH x 2, from the tester's M3.5
+# shots). "regular" is the pink polo's: its photo shows the sleeve as worn, 0.29 joint widths at
+# the cuff, which is 1.2 arm widths. "slim" and "loose" are judgement, not measured.
+ARM_WIDTH_PER_JOINT = 0.24
+SLEEVE_ALLOWANCE = {"slim": 1.1, "regular": 1.2, "loose": 1.4}
+HEM_DROP = 0.1       # GarmentMesh.HEM_DROP
 
 # Test body, built from the proportions measured on device (see garment_points.py).
 SHOULDER_WIDTH = 330
@@ -111,8 +128,11 @@ def vertex_weights(entry, points):
 
 
 def grid(w, h):
-    cols = max(1, round(w / MESH_CELL))
-    rows = max(1, round(h / MESH_CELL))
+    cell = MESH_CELL
+    while (max(1, round(w / cell)) + 1) * (max(1, round(h / cell)) + 1) > MAX_VERTICES:
+        cell += 1
+    cols = max(1, round(w / cell))
+    rows = max(1, round(h / cell))
     xs = np.linspace(0, w, cols + 1)
     ys = np.linspace(0, h, rows + 1)
     gx, gy = np.meshgrid(xs, ys)
@@ -136,6 +156,47 @@ def body(left_deg, right_deg):
     return pts
 
 
+def sleeve_matrix(entry, side, view, handedness):
+    """
+    Places one sleeve on the arm: its own centre line - armhole midpoint to cuff midpoint - along
+    the arm's line, shoulder joint to elbow, and its width across that line squeezed or stretched
+    to the arm's width times the sleeve allowance.
+
+    Rotating the whole sleeve about the shoulder joint, by the joint-to-cuff line, swung a wide
+    flat sleeve's underarm half across the chest when the arm hung down: on the white waffle shirt
+    over half its grid points landed more than 20 px inside the arm, some nearly 300 px. A flat
+    sleeve shows half its circumference; worn, that fabric wraps round the arm.
+
+    Mirrors OverlayView.sleeveMatrix. Change the two together.
+    """
+    a, h = entry["anchors"], entry["armholes"][side]
+    p = lambda d: np.array([d["x"], d["y"]], float)
+    if "cuffOuter" not in h:
+        return None
+    joint, elbow = p(a[f"{side}_shoulder"]), p(a[f"{side}_elbow"])
+    root = (p(h["shoulder"]) + p(h["armpit"])) / 2
+    cuff_outer, cuff_inner = p(h["cuffOuter"]), p(h["cuffInner"])
+    u_g = (cuff_outer + cuff_inner) / 2 - root
+    u_g /= np.linalg.norm(u_g)
+    v_g = np.array([-u_g[1], u_g[0]])
+    origin = root + ((joint - root) @ u_g) * u_g       # the joint, moved onto the centre line
+    length_g = (elbow - origin) @ u_g
+    width_g = abs((cuff_outer - cuff_inner) @ v_g)
+
+    s, e = np.array(view[f"{side}_shoulder"], float), np.array(view[f"{side}_elbow"], float)
+    length_b = np.linalg.norm(e - s)
+    if length_g < 1 or width_g < 1 or length_b < 1:
+        return None
+    u_b = (e - s) / length_b
+    v_b = handedness * np.array([-u_b[1], u_b[0]])
+    joints_b = np.linalg.norm(np.array(view["right_shoulder"]) - np.array(view["left_shoulder"]))
+    target = ARM_WIDTH_PER_JOINT * joints_b * SLEEVE_ALLOWANCE.get(entry.get("fitStyle"), 1.2)
+
+    linear = (length_b / length_g) * np.outer(u_b, u_g) + (target / width_g) * np.outer(v_b, v_g)
+    shift = s - linear @ origin
+    return ((linear[0, 0], linear[0, 1], shift[0]), (linear[1, 0], linear[1, 1], shift[1]))
+
+
 def bone_matrices(entry, view):
     a = {k: (v["x"], v["y"]) for k, v in entry["anchors"].items()}
     mid = lambda p: ((p["left_hip"][0] + p["right_hip"][0]) / 2, (p["left_hip"][1] + p["right_hip"][1]) / 2)
@@ -145,8 +206,10 @@ def bone_matrices(entry, view):
     handedness = 1.0 if ta * te - tb * td >= 0 else -1.0
     sleeves = []
     for side in ("left", "right"):
-        m = segment_matrix(a[f"{side}_shoulder"], a[f"{side}_elbow"],
-                           view[f"{side}_shoulder"], view[f"{side}_elbow"], torso, handedness)
+        m = sleeve_matrix(entry, side, view, handedness)
+        if m is None:
+            m = segment_matrix(a[f"{side}_shoulder"], a[f"{side}_elbow"],
+                               view[f"{side}_shoulder"], view[f"{side}_elbow"], torso, handedness)
         sleeves.append(m if m is not None else torso)
     return [torso] + sleeves
 
@@ -175,8 +238,41 @@ def ease_weights(entry, points):
     return 1 - np.maximum(fl, fr)
 
 
+def torso_width(entry, texture, ys):
+    """Garment body width at each height in `ys`, between its outermost body pixels (GarmentMesh.measureTorso)."""
+    alpha = np.asarray(texture.getchannel("A"))
+    h, w = alpha.shape
+    left, right = side_boundary(entry, "left"), side_boundary(entry, "right")
+    out = np.zeros(len(ys))
+    for i, y in enumerate(ys):
+        row = min(h - 1, int(y))
+        pts = np.stack([np.arange(w) + 0.5, np.full(w, row + 0.5)], axis=1)
+        body = ((alpha[row] >= 128) & (signed_distance(pts, left, -1) < 0)
+                & (signed_distance(pts, right, 1) < 0))
+        xs = np.nonzero(body)[0]
+        width = xs.max() - xs.min() + 1 if len(xs) else 0
+        # A sharp narrowing going down is the hem, not the cut: keep the row above's width.
+        above = out[i - 1] if i > 0 else 0
+        out[i] = above if width < (1 - HEM_DROP) * above else width
+    return out
+
+
+def fitted_ease(entry, texture, points):
+    """Per point, the widening that fits its row to the stand-in wearer (OverlayView.fitToBody)."""
+    w, h = texture.size
+    _, rows, _ = grid(w, h)
+    row_ys = np.array([min(h - 1, r * h // rows) for r in range(rows + 1)], float)
+    garment = torso_width(entry, texture, row_ys)
+    target = BODY_WIDTH_PER_JOINT * FIT_ALLOWANCE.get(entry.get("fitStyle"), 1.08) * joint_width(entry)
+    ease = np.where(garment >= 1, np.clip(target / np.maximum(garment, 1) - 1, MIN_EASE, MAX_EASE), 0)
+    return np.interp(points[:, 1], row_ys, ease)
+
+
 def widen(entry, points, amount):
-    """Torso, and the inner part of each sleeve, pushed away from the centre line (GarmentMesh.widen)."""
+    """
+    Torso, and the inner part of each sleeve, pushed away from the centre line (GarmentMesh.widen).
+    `amount` is one widening fraction, or one per point.
+    """
     a = entry["anchors"]
     centre_x = (a["left_shoulder"]["x"] + a["right_shoulder"]["x"]) / 2
     e = amount * ease_ramp(entry, points[:, 1])
@@ -252,7 +348,7 @@ def render(entry, texture, sleeves, left_deg, right_deg):
     cols, rows, src = grid(w, h)
     weights = vertex_weights(entry, src)
     view = body(left_deg, right_deg)
-    dst = skin(widen(entry, src, TORSO_EASE), weights, bone_matrices(entry, view))
+    dst = skin(widen(entry, src, fitted_ease(entry, texture, src)), weights, bone_matrices(entry, view))
     canvas = checkerboard(*CANVAS).convert("RGB")
     canvas = draw_mesh(canvas, texture, cols, rows, src, dst)
     canvas = draw_mesh(canvas, sleeves, cols, rows, src, dst)

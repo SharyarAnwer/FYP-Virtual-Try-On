@@ -198,6 +198,7 @@ object GarmentCatalog {
             val front = clearNeckOpening(photo, garment.neckOpening)
             // Weights and the sleeves-only copy are built here, off the UI thread, once.
             val mesh = GarmentMesh(garment)
+            mesh.measureTorso(photo)
             return GarmentLayers(emptyList(), emptyList(), emptyList(),
                 meshFront = front, meshSleeves = mesh.sleevesOnly(front), mesh = mesh)
         }
@@ -258,7 +259,9 @@ object GarmentCatalog {
             holes.keys().asSequence().associateWith { side ->
                 val h = holes.getJSONObject(side)
                 Armhole(point(h.getJSONObject("shoulder")), point(h.getJSONObject("armpit")),
-                    point(h.getJSONObject("below")))
+                    point(h.getJSONObject("below")),
+                    cuffOuter = h.optJSONObject("cuffOuter")?.let { point(it) },
+                    cuffInner = h.optJSONObject("cuffInner")?.let { point(it) })
             }
         } ?: emptyMap()
 

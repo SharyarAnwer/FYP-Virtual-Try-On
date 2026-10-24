@@ -18,6 +18,20 @@ garment's outline: the shoulder joint sits inboard of the seam and below the top
 shoulder; the hip joint sits well above the hem. The anchors are therefore derived from the
 garment points using body proportions, and those proportions were measured on the test device
 rather than taken from anthropometric tables (see the constants below).
+
+Placed by the neckline, not the shoulder seams
+----------------------------------------------
+Where the shoulder seams sit is a matter of style: on the shoulder for a fitted polo, halfway down
+the upper arm for a dropped-shoulder shirt, nowhere at all on a raglan. Every shirt hangs from the
+base of the neck, though, so the shoulder joints are placed from the neck points - where the
+collar's outer edge meets the shoulder line, a sharp step in the photo's top edge - at a fixed
+multiple of the neck's width. Placed by the seams, a dropped-shoulder shirt was drawn with its
+shoulders 23% too wide: the sleeves stuck out like wings and the whole shirt sat low.
+
+Everything outward of the shoulder joint then belongs to the sleeve: the armhole boundary starts
+just outside the joint rather than at the seam, so a dropped shoulder's extra fabric bends down
+with the arm, as it drapes on a person. If no neck step is found - a collarless neckline, say -
+the tool falls back to placing the joints from the seams, and says so.
 """
 
 import argparse
@@ -29,9 +43,21 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 # --- body proportions, measured on device ------------------------------------------------
-# Shoulder joint relative to the garment's shoulder tip, as fractions of the tip-to-tip span.
-# Tuned in M3 on the placeholder shirts: the joint sits ~11% of the span inboard of the seam
-# and ~10% of it below the top of the shoulder.
+# Shoulder joints from the neck points. All three were measured on the pink polo, whose shoulder
+# anchors were checked on the tester in M3 and whose seams sit on the shoulder, so seams and
+# neckline agree there:
+#   joint-to-joint width       = 2.18 x the neck width (collar edge to collar edge)
+#   joint below the top edge   = 0.195 x joint width, measured at the joint's own x
+#   armhole starts outward of the joint by 0.141 x joint width, on the top edge
+NECK_TO_SHOULDER = 2.18
+JOINT_BELOW_TOP = 0.195
+ARMHOLE_OUTSIDE_JOINT = 0.141
+# The collar step must be at least this tall, as a fraction of image height, to count.
+MIN_NECK_STEP = 0.015
+
+# Fallback, placing the joints from the seams: the joint relative to the garment's shoulder tip,
+# as fractions of the tip-to-tip span. Tuned in M3 on the placeholder shirts: the joint sits ~11%
+# of the span inboard of the seam and ~10% of it below the top of the shoulder.
 SHOULDER_INSET = 0.11
 SHOULDER_DROP = 0.10
 # Hip landmarks below the shoulder landmarks, per unit of joint-to-joint shoulder width.
@@ -70,6 +96,35 @@ def knee(xs, ys):
     return float(xs[i]), float(ys[i])
 
 
+def gap_at(row, centre, side):
+    """
+    In one row, walking outward from the centre: the body's outer edge and the next garment pixel
+    beyond the background after it, or None if the row has no such gap.
+    """
+    w = len(row)
+    x = centre
+    if not row[x]:
+        return None
+    while 0 <= x + side < w and row[x + side]:
+        x += side
+    edge = x
+    while 0 <= x + side < w and not row[x + side]:
+        x += side
+    if not (0 <= x + side < w):
+        return None
+    return edge, x + side
+
+
+def armpit_apex(mask, side, start, stop, centre, persist=4):
+    """Highest row in [start, stop) with a sleeve/body gap that persists `persist` rows; see side_points."""
+    for y in range(max(start, 0), stop):
+        gaps = [gap_at(mask[y + k], centre, side) for k in range(persist)]
+        if all(g is not None for g in gaps):
+            edge, sleeve = gaps[0]
+            return (float(edge + sleeve) / 2, float(y))
+    return None
+
+
 def side_points(mask, outline, side):
     """
     Shoulder tip, armpit, cuff centre and hem corner for one side of the garment.
@@ -80,13 +135,19 @@ def side_points(mask, outline, side):
     h, w = mask.shape
     rows = np.where(outline >= 0)[0]
     top, bottom = rows[0], rows[-1]
+    # Centre column, for walking outward: midway between the garment's leftmost and rightmost.
+    cols = np.where(mask.any(axis=0))[0]
+    centre = int((cols[0] + cols[-1]) / 2)
     out = side * outline.astype(float)                   # larger = further outward
 
     # Cuff: the sleeve's outermost row. The body below it is much narrower.
     cuff_row = int(rows[np.argmax(out[rows])])
 
-    # Body side: the outline in the lower torso, well clear of sleeves and hem curve.
-    body_rows = rows[(rows > cuff_row + 0.06 * h) & (rows < bottom - 0.08 * h)]
+    # Body side: the outline in the lower torso, well clear of sleeves and hem curve. Taken from
+    # the garment's lower part rather than just below the cuff row: a sleeve laid out to the side
+    # reaches well below its own outermost point, and those rows are still sleeve.
+    span = bottom - top
+    body_rows = rows[(rows > bottom - 0.45 * span) & (rows < bottom - 0.08 * h)]
     body_x = float(np.median(outline[body_rows]))
 
     # Shoulder tip: sharpest bend of the outline between the neck and the cuff. The upper part
@@ -95,30 +156,45 @@ def side_points(mask, outline, side):
     seg = np.arange(neck_row, cuff_row + 1)
     sx, sy = knee(outline[seg].astype(float), seg.astype(float))
 
-    # Armpit: the apex of the notch between sleeve and body, found by walking up a column just
-    # outside the body side until the sleeve closes over it.
-    probe_x = int(round(body_x + side * 3))             # 3 px outward of the body side
-    y = int(body_rows[0])
-    while y > cuff_row - 0.12 * h and not mask[y, probe_x]:
-        y -= 1
-    armpit = (body_x, float(y))
+    # Armpit: the apex of the notch between sleeve and body - the highest row, below the shoulder
+    # tip, in which walking outward from the centre leaves the body, crosses background, and
+    # meets the sleeve again. The gap must persist for a few rows so a stray pixel is not taken
+    # for it. Climbing a single column just outside the lower body side found the armpit too low
+    # whenever the body was wider at the chest than at the waist, as a worn shape usually is: the
+    # column ran into the body's side below the real armpit.
+    armpit = armpit_apex(mask, side, int(sy), int(bottom - 0.1 * h), centre)
+    if armpit is None:
+        raise SystemExit(f"no armpit found on the {'left' if side < 0 else 'right'}: is there a gap "
+                         "between sleeve and body in the photo?")
+    probe_x = int(round(armpit[0] + side * 3))
 
     # Cuff centre: midpoint of the cuff hem's two ends. The outer end is the cuff row's outline
-    # point; the inner end is the lowest point of the sleeve's bottom edge, searched only in
-    # columns outside the body and rows above it so neither the body nor the armpit apex -
-    # which sits on the same probe column - can be mistaken for it.
+    # point; the inner end is the lowest point of the sleeve's bottom edge. In each column
+    # outward of the probe, the sleeve's bottom edge is where the column's first run of garment
+    # - shoulder, then sleeve - ends: below it is the notch. Taking the end of that first run,
+    # not the column's lowest garment pixel, keeps a body that flares out towards the hem from
+    # being mistaken for sleeve.
     outer = (float(outline[cuff_row]), float(cuff_row))
     lo, hi = sorted((probe_x, int(outline[cuff_row])))
-    above_body = mask[:int(body_rows[0]), :]
-    lowest = [(x, int(np.where(above_body[:, x])[0].max()))
-              for x in range(lo, hi + 1) if above_body[:, x].any() and x != probe_x]
+
+    def first_run_end(x):
+        col = mask[:, x]
+        start = int(np.argmax(col))
+        return start + int(np.argmax(~col[start:])) - 1 if not col[start:].all() else h - 1
+
+    lowest = [(x, first_run_end(x)) for x in range(lo, hi + 1)
+              if side * (x - probe_x) > 0 and mask[:, x].any()]
     ix, iy = max(lowest, key=lambda p: p[1])
     inner = (float(ix), float(iy))
     sleeve_cols = [x for x, _ in lowest]
     cuff = ((outer[0] + inner[0]) / 2, (outer[1] + inner[1]) / 2)
 
+    # Hem corner: the body side just above the hem, at the hem's height. Reading the outline on
+    # the hem row itself put the corner partway along the hem whenever the garment sat slightly
+    # tilted or its hem curved up at the sides, since that row then missed the side altogether.
     hem_row = int(bottom - 0.015 * h)
-    hem = (float(outline[hem_row]), float(hem_row))
+    side_rows = rows[(rows > bottom - 0.10 * h) & (rows < bottom - 0.03 * h)]
+    hem = (float(np.median(outline[side_rows])), float(hem_row))
 
     # Below the armpit the sleeve/torso boundary must pass between the cuff, hanging outward,
     # and the body side, running down to the hem. Its direction bisects the two: armpit-to-
@@ -135,13 +211,65 @@ def side_points(mask, outline, side):
             "cuff_outer": outer, "cuff_inner": inner, "hem": hem, "sleeve_cols": len(sleeve_cols)}
 
 
-def derive_anchors(left, right):
-    span = right["shoulder_tip"][0] - left["shoulder_tip"][0]
+def top_edge(mask):
+    """The garment's topmost row in each column (image height where the column is empty)."""
+    h, _ = mask.shape
+    return np.where(mask.any(axis=0), mask.argmax(axis=0), h).astype(float)
+
+
+def neck_points(mask, left, right):
+    """
+    The two neck points, where the collar's outer edge meets the shoulder line: on each side of
+    the centre, the steepest drop in the top edge. None if either side has no clear step.
+    """
+    h, w = mask.shape
+    top = top_edge(mask)
+    centre = (left["shoulder_tip"][0] + right["shoulder_tip"][0]) / 2
+    k = max(3, round(0.01 * w))
+    found = []
+    for side in (-1, 1):
+        best, at = 0.0, None
+        x = int(round(centre))
+        while 0 <= x + side * k < w and abs(x - centre) < 0.35 * w:
+            step = top[x + side * k] - top[x]
+            if step > best:
+                best, at = step, x
+            x += side
+        if at is None or best < MIN_NECK_STEP * h:
+            return None
+        found.append((at + side * k / 2, float(top[at + side * k])))
+    return found[0], found[1]
+
+
+def derive_anchors(mask, left, right):
+    """
+    Body anchors, and where each armhole meets the shoulder line. Returns
+    (anchors, joint width, {"left"/"right": armhole shoulder point}, neck points or None).
+    """
     anchors = {}
-    for name, pts, side in (("left", left, -1), ("right", right, 1)):
-        tx, ty = pts["shoulder_tip"]
-        anchors[f"{name}_shoulder"] = (tx - side * SHOULDER_INSET * span, ty + SHOULDER_DROP * span)
-    joint_width = anchors["right_shoulder"][0] - anchors["left_shoulder"][0]
+    armhole_top = {}
+    neck = neck_points(mask, left, right)
+    if neck is not None:
+        top = top_edge(mask)
+        (lx, _), (rx, _) = neck
+        centre = (lx + rx) / 2
+        joint_width = NECK_TO_SHOULDER * (rx - lx)
+        span = right["shoulder_tip"][0] - left["shoulder_tip"][0]
+        if not (0 < joint_width < span):
+            neck = None              # implausible: joints outside the shoulders; use the seams
+    if neck is not None:
+        for name, side in (("left", -1), ("right", 1)):
+            jx = centre + side * joint_width / 2
+            anchors[f"{name}_shoulder"] = (jx, top[int(round(jx))] + JOINT_BELOW_TOP * joint_width)
+            ax = jx + side * ARMHOLE_OUTSIDE_JOINT * joint_width
+            armhole_top[name] = (ax, float(top[int(round(ax))]))
+    else:
+        span = right["shoulder_tip"][0] - left["shoulder_tip"][0]
+        for name, pts, side in (("left", left, -1), ("right", right, 1)):
+            tx, ty = pts["shoulder_tip"]
+            anchors[f"{name}_shoulder"] = (tx - side * SHOULDER_INSET * span, ty + SHOULDER_DROP * span)
+            armhole_top[name] = pts["shoulder_tip"]
+        joint_width = anchors["right_shoulder"][0] - anchors["left_shoulder"][0]
 
     for name, pts in (("left", left), ("right", right)):
         jx, jy = anchors[f"{name}_shoulder"]
@@ -152,7 +280,7 @@ def derive_anchors(left, right):
         # Hip x only matters through the hip midpoint; the hem corners keep it on the centreline.
         hip_y = jy + HIP_DROP_PER_SHOULDER_WIDTH * joint_width
         anchors[f"{name}_hip"] = (pts["hem"][0], hip_y)
-    return anchors, joint_width
+    return anchors, joint_width, armhole_top, neck
 
 
 def dominant_colour(path):
@@ -162,7 +290,7 @@ def dominant_colour(path):
     return f"#{r:02X}{g:02X}{b:02X}"
 
 
-def preview(path, left, right, anchors, out_path):
+def preview(path, left, right, anchors, armhole_top, neck, out_path):
     img = Image.open(path).convert("RGBA")
     board = Image.new("RGBA", img.size, (238, 241, 243, 255))
     board.alpha_composite(img)
@@ -177,14 +305,17 @@ def preview(path, left, right, anchors, out_path):
 
     garment = (255, 170, 0, 255)
     body = (0, 150, 190, 255)
-    for pts in (left, right):
-        d.line([pts["shoulder_tip"], pts["armpit"], pts["below"]], fill=garment, width=2)
+    for name, pts in (("left", left), ("right", right)):
+        d.line([armhole_top[name], pts["armpit"], pts["below"]], fill=garment, width=2)
         for key in ("shoulder_tip", "armpit", "cuff", "hem"):
             mark(pts[key], garment, key.replace("_", " "))
+    for p in neck or ():
+        mark(p, garment, "neck")
     for name, p in anchors.items():
         mark(p, body, name, r=9)
-    d.text((10, 8), "orange = garment points found in the photo;  blue = body anchors derived from them",
-           fill=(20, 24, 28, 255))
+    method = "neck points" if neck else "shoulder seams (no neck step found)"
+    d.text((10, 8), "orange = garment points found in the photo;  blue = body anchors derived from "
+           f"them;  shoulders placed from the {method}", fill=(20, 24, 28, 255))
     board.convert("RGB").save(out_path)
 
 
@@ -208,7 +339,7 @@ def main():
     left_outline, right_outline = profiles(mask)
     left = side_points(mask, left_outline, -1)
     right = side_points(mask, right_outline, 1)
-    anchors, joint_width = derive_anchors(left, right)
+    anchors, joint_width, armhole_top, neck = derive_anchors(mask, left, right)
 
     r2 = lambda p: {"x": round(p[0], 1), "y": round(p[1], 1)}
     entry = {
@@ -222,8 +353,10 @@ def main():
         "back": os.path.basename(back) if os.path.exists(back) else None,
         "anchors": {k: r2(v) for k, v in anchors.items()},
         "armholes": {
-            side: {"shoulder": r2(pts["shoulder_tip"]), "armpit": r2(pts["armpit"]),
-                   "below": r2(pts["below"])}
+            side: {"shoulder": r2(armhole_top[side]), "armpit": r2(pts["armpit"]),
+                   "below": r2(pts["below"]),
+                   # The cuff hem's two ends: the sleeve's own centre line and width come from them.
+                   "cuffOuter": r2(pts["cuff_outer"]), "cuffInner": r2(pts["cuff_inner"])}
             for side, pts in (("left", left), ("right", right))
         },
         "colour": {"name": args.name.split()[0].lower(), "hex": dominant_colour(front)},
@@ -256,8 +389,13 @@ def main():
         handle.write("\n")
 
     out = os.path.join("tools", f"garment_points_{args.id}.png")
-    preview(front, left, right, anchors, out)
+    preview(front, left, right, anchors, armhole_top, neck, out)
     print(f"{args.id}: {w}x{h}, shoulder-joint width {joint_width:.0f} px")
+    if neck:
+        print(f"  shoulders placed from the neck points {tuple(round(v) for v in neck[0])} "
+              f"and {tuple(round(v) for v in neck[1])}")
+    else:
+        print("  no usable neck step - shoulders placed from the seams; check the preview")
     for side, pts in (("left", left), ("right", right)):
         print(f"  {side:5s} tip {pts['shoulder_tip']}  armpit {pts['armpit']}  cuff {tuple(round(v) for v in pts['cuff'])}  hem {pts['hem']}")
     for k, v in anchors.items():

@@ -70,7 +70,7 @@ class OverlayView @JvmOverloads constructor(
          * no chin point, so the jaw is estimated as an oval from ear to ear whose lowest point is
          * this far below the mouth. 1.2 reaches the bottom of the tester's beard; a clean-shaven
          * chin sits higher, nearer 0.8, where this hides a little of the collar's back that the
-         * neck would actually show. Tuned on one person, like [FIXED_TORSO_EASE].
+         * neck would actually show. Tuned on one person.
          */
         const val CHIN_DROP = 1.2f
 
@@ -83,16 +83,40 @@ class OverlayView @JvmOverloads constructor(
         const val JAW_WIDTH = 1.5f
 
         /**
-         * Fixed widening of a real garment's torso below the armpits: 18% wider than the
-         * shoulder-joint distance alone would make it.
-         *
-         * Measured on device in a fitted undershirt, the unwidened polo left 12-20 px of the
-         * undershirt showing down each side - 13-16% of the shirt's width - because the tester's
-         * torso is broader relative to his shoulders than a single ratio assumes. 0.18 covers that
-         * with a small margin. It is tuned on one person and is the one number to replace when
-         * torso width is measured live (M6).
+         * Limits on how far a garment's body is widened or narrowed to fit the wearer, so a bad
+         * measurement cannot throw it to a silly size.
          */
-        const val FIXED_TORSO_EASE = 0.18f
+        const val MIN_EASE = -0.6f
+        const val MAX_EASE = 1.0f
+
+        /**
+         * How much wider than the wearer's measured torso a garment's body is drawn, by its
+         * catalog fit style. The wearer is measured in whatever they have on, so 1.0 would just
+         * cover it; these add the garment's own looseness. A property of the garment's cut, not
+         * of any one wearer.
+         */
+        /**
+         * The wearer's upper-arm width, as a fraction of their shoulder-joint width: twice
+         * [BodyWidthMeter.ARM_HALF_WIDTH], from the tester's M3.5 shots.
+         */
+        const val ARM_WIDTH_PER_JOINT = 0.24f
+
+        /**
+         * How much wider than the arm a sleeve is drawn, by fit style. "regular" is the pink polo's:
+         * its photo shows the sleeve as worn, 0.29 joint widths at the cuff, which is 1.2 arm
+         * widths. "slim" and "loose" are judgement, not measured.
+         */
+        fun sleeveAllowance(style: String): Float = when (style) {
+            "slim" -> 1.1f
+            "loose" -> 1.4f
+            else -> 1.2f
+        }
+
+        fun fitAllowance(style: String): Float = when (style) {
+            "slim" -> 1.03f
+            "loose" -> 1.15f
+            else -> 1.08f
+        }
 
         /**
          * Length of the perpendicular used as a segment's third control point, in artwork px.
@@ -166,16 +190,29 @@ class OverlayView @JvmOverloads constructor(
         val leftHip: Anchor,
         val rightHip: Anchor,
         val leftElbow: Anchor,
-        val rightElbow: Anchor
+        val rightElbow: Anchor,
+        /** See [fitAllowance]. */
+        val allowance: Float,
+        /** Each sleeve's own frame on the photo, or null to follow the anchors; see [SleeveFrame]. */
+        val leftSleeve: SleeveFrame?,
+        val rightSleeve: SleeveFrame?,
+        /** See [sleeveAllowance]. */
+        val sleeveAllowance: Float
     ) {
         /** Torso, left sleeve, right sleeve — the order of [GarmentMesh.weights]. */
         val bones = Array(GarmentMesh.BONES) { Matrix() }
         val placed = Array(GarmentMesh.BONES) { FloatArray(mesh.vertexCount * 2) }
         val vertices = FloatArray(mesh.vertexCount * 2)
 
-        /** Widening per grid row. A flat fixed profile for now; a measured one later. */
-        val easeAmount = FloatArray(mesh.rows + 1) { FIXED_TORSO_EASE }
+        /**
+         * Widening per grid row, set each frame by [fitToBody]. Starts at 0 - the photo's own
+         * proportions - until the first body measurement arrives.
+         */
+        val easeAmount = FloatArray(mesh.rows + 1)
         val widened = FloatArray(mesh.vertexCount * 2)
+
+        /** The wearer's torso width at each [BodyWidthMeter.LEVELS], in view px; NaN if unknown. */
+        val levelWidths = FloatArray(BodyWidthMeter.LEVELS.size)
 
         companion object {
             fun from(garment: Garment, layers: GarmentLayers): MeshRender? {
@@ -188,8 +225,49 @@ class OverlayView @JvmOverloads constructor(
                     leftHip = garment.anchor("left_hip") ?: return null,
                     rightHip = garment.anchor("right_hip") ?: return null,
                     leftElbow = garment.anchor("left_elbow") ?: return null,
-                    rightElbow = garment.anchor("right_elbow") ?: return null
+                    rightElbow = garment.anchor("right_elbow") ?: return null,
+                    allowance = fitAllowance(garment.fitStyle),
+                    leftSleeve = SleeveFrame.of(garment.armholes["left"], garment.anchor("left_shoulder"),
+                        garment.anchor("left_elbow")),
+                    rightSleeve = SleeveFrame.of(garment.armholes["right"], garment.anchor("right_shoulder"),
+                        garment.anchor("right_elbow")),
+                    sleeveAllowance = sleeveAllowance(garment.fitStyle)
                 )
+            }
+        }
+    }
+
+    /**
+     * One sleeve's own axes on the garment photo: its centre line, from the middle of the armhole
+     * to the middle of the cuff, and the direction across it. [origin] is the shoulder joint moved
+     * onto that line; [length] runs from there to the elbow anchor along it; [width] is the cuff's
+     * width across it.
+     */
+    private class SleeveFrame(
+        val originX: Float, val originY: Float,
+        val ux: Float, val uy: Float,
+        val length: Float, val width: Float
+    ) {
+        companion object {
+            fun of(hole: Armhole?, joint: Anchor?, elbow: Anchor?): SleeveFrame? {
+                val outer = hole?.cuffOuter ?: return null
+                val inner = hole.cuffInner ?: return null
+                if (joint == null || elbow == null) return null
+                val rootX = (hole.shoulder.x + hole.armpit.x) / 2f
+                val rootY = (hole.shoulder.y + hole.armpit.y) / 2f
+                var ux = (outer.x + inner.x) / 2f - rootX
+                var uy = (outer.y + inner.y) / 2f - rootY
+                val n = hypot(ux, uy)
+                if (n < 1f) return null
+                ux /= n
+                uy /= n
+                val along = (joint.x - rootX) * ux + (joint.y - rootY) * uy
+                val ox = rootX + along * ux
+                val oy = rootY + along * uy
+                val length = (elbow.x - ox) * ux + (elbow.y - oy) * uy
+                val width = abs((outer.x - inner.x) * -uy + (outer.y - inner.y) * ux)
+                if (length < 1f || width < 1f) return null
+                return SleeveFrame(ox, oy, ux, uy, length, width)
             }
         }
     }
@@ -226,6 +304,20 @@ class OverlayView @JvmOverloads constructor(
     // filtering genuinely changes the result rather than just costing time.
     private val garmentPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         isFilterBitmap = true
+    }
+
+    /** Body-width lines: green where measured, amber where filled in from the other side. */
+    private val measuredPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        strokeCap = Paint.Cap.ROUND
+        color = Color.parseColor("#3DDC84")
+    }
+    private val filledPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        strokeCap = Paint.Cap.ROUND
+        color = Color.parseColor("#FFB300")
     }
 
     private val guide = RectF()
@@ -266,6 +358,21 @@ class OverlayView @JvmOverloads constructor(
             postInvalidate()
         }
     @Volatile private var meshRender: MeshRender? = null
+
+    /** Latest body-width snapshot from [BodyWidthMeter], or null. Drawn with the skeleton. */
+    @Volatile private var bodyWidths: FloatArray? = null
+
+    /**
+     * Mean widening applied over the torso's middle rows in the last frame, for the perf log;
+     * NaN until a garment has been fitted.
+     */
+    @Volatile var fittedEase: Float = Float.NaN
+        private set
+
+    /** Publishes a body-width snapshot; the next [setPose] triggers the redraw. */
+    fun setBodyWidths(snapshot: FloatArray?) {
+        bodyWidths = snapshot
+    }
 
     /**
      * Sets the garment to render, or clears it when either argument is null. [layers] must be in
@@ -340,6 +447,7 @@ class OverlayView @JvmOverloads constructor(
         if (showSkeleton) {
             drawSkeleton(canvas, snapshot, dimmed = wearingGarment)
             if (faceSeen) canvas.drawPath(facePath, bonePaint)
+            bodyWidths?.let { drawBodyWidths(canvas, it) }
         }
     }
 
@@ -516,13 +624,16 @@ class OverlayView @JvmOverloads constructor(
         if (handedness == 0f) return false
 
         m.bones[0].set(torsoMatrix)
-        if (!segmentMatrix(m.leftShoulder, m.leftElbow, LEFT_SHOULDER, LEFT_ELBOW, p, handedness, m.bones[1])) {
-            m.bones[1].set(torsoMatrix)
-        }
-        if (!segmentMatrix(m.rightShoulder, m.rightElbow, RIGHT_SHOULDER, RIGHT_ELBOW, p, handedness, m.bones[2])) {
-            m.bones[2].set(torsoMatrix)
-        }
+        val leftPlaced = m.leftSleeve?.let {
+            sleeveMatrix(it, LEFT_SHOULDER, LEFT_ELBOW, p, handedness, m.sleeveAllowance, m.bones[1])
+        } ?: segmentMatrix(m.leftShoulder, m.leftElbow, LEFT_SHOULDER, LEFT_ELBOW, p, handedness, m.bones[1])
+        if (!leftPlaced) m.bones[1].set(torsoMatrix)
+        val rightPlaced = m.rightSleeve?.let {
+            sleeveMatrix(it, RIGHT_SHOULDER, RIGHT_ELBOW, p, handedness, m.sleeveAllowance, m.bones[2])
+        } ?: segmentMatrix(m.rightShoulder, m.rightElbow, RIGHT_SHOULDER, RIGHT_ELBOW, p, handedness, m.bones[2])
+        if (!rightPlaced) m.bones[2].set(torsoMatrix)
 
+        fitToBody(m)
         m.mesh.widen(m.easeAmount, m.widened)
         for (k in 0 until GarmentMesh.BONES) m.bones[k].mapPoints(m.placed[k], m.widened)
 
@@ -545,6 +656,137 @@ class OverlayView @JvmOverloads constructor(
         canvas.drawBitmapMesh(m.front, cols, rows, out, 0, null, 0, garmentPaint)
         canvas.drawBitmapMesh(m.sleeves, cols, rows, out, 0, null, 0, garmentPaint)
         return true
+    }
+
+    /**
+     * Sets [MeshRender.easeAmount] so that, row by row, the garment's body is as wide as the
+     * wearer's torso - measured live by [BodyWidthMeter] - times the garment's fit allowance.
+     *
+     * Each grid row sits at a height on the torso, [GarmentMesh.rowT]; the wearer's width there is
+     * interpolated between the measured levels around it. The garment's own width at that row,
+     * [GarmentMesh.torsoWidth], becomes its on-screen width through the torso transform's scale
+     * along the row. The widening is whatever makes the two match.
+     *
+     * With no measurement this frame the amounts are left as they were, so the garment keeps its
+     * last fit rather than jumping. Requires [computeTorso] to have run this frame.
+     */
+    private fun fitToBody(m: MeshRender) {
+        val body = bodyWidths ?: return
+        val levels = BodyWidthMeter.LEVELS
+        val stride = BodyWidthMeter.STRIDE
+        val sx = imageWidth * mapping[0]
+        val sy = imageHeight * mapping[0]
+        var known = 0
+        for (k in levels.indices) {
+            val o = k * stride
+            if (o + stride > body.size) {
+                m.levelWidths[k] = Float.NaN
+                continue
+            }
+            val quality = body[o + 6].toInt()
+            val cx = body[o] * sx
+            val cy = body[o + 1] * sy
+            val leftHalf = if (quality / 3 != BodyWidthMeter.NONE) {
+                hypot(body[o + 2] * sx - cx, body[o + 3] * sy - cy)
+            } else Float.NaN
+            val rightHalf = if (quality % 3 != BodyWidthMeter.NONE) {
+                hypot(body[o + 4] * sx - cx, body[o + 5] * sy - cy)
+            } else Float.NaN
+            m.levelWidths[k] = when {
+                !leftHalf.isNaN() && !rightHalf.isNaN() -> leftHalf + rightHalf
+                !leftHalf.isNaN() -> 2f * leftHalf
+                !rightHalf.isNaN() -> 2f * rightHalf
+                else -> Float.NaN
+            }
+            if (!m.levelWidths[k].isNaN()) known++
+        }
+        if (known == 0) return
+
+        // On-screen px per artwork px along a garment row.
+        torsoMatrix.getValues(matrixValues)
+        val rowScale = hypot(matrixValues[Matrix.MSCALE_X], matrixValues[Matrix.MSKEW_Y])
+        if (rowScale <= 0f) return
+
+        var sum = 0f
+        var count = 0
+        for (r in 0..m.mesh.rows) {
+            val garmentWidth = m.mesh.torsoWidth[r]
+            val bodyWidth = widthAt(m.levelWidths, m.mesh.rowT[r])
+            m.easeAmount[r] = if (garmentWidth < 1f || bodyWidth.isNaN()) 0f
+            else (bodyWidth * m.allowance / (garmentWidth * rowScale) - 1f).coerceIn(MIN_EASE, MAX_EASE)
+            if (m.mesh.rowT[r] in 0.5f..1.1f) {
+                sum += m.easeAmount[r]
+                count++
+            }
+        }
+        fittedEase = if (count > 0) sum / count else Float.NaN
+    }
+
+    /**
+     * The wearer's torso width at height [t], interpolated between the nearest measured levels
+     * either side, or the nearest one beyond the measured range; NaN if none is measured.
+     */
+    private fun widthAt(widths: FloatArray, t: Float): Float {
+        val levels = BodyWidthMeter.LEVELS
+        var below = -1
+        var above = -1
+        for (k in levels.indices) {
+            if (widths[k].isNaN()) continue
+            if (levels[k] <= t) below = k
+            if (levels[k] >= t && above < 0) above = k
+        }
+        return when {
+            below >= 0 && above >= 0 && above != below -> {
+                val f = (t - levels[below]) / (levels[above] - levels[below])
+                widths[below] + f * (widths[above] - widths[below])
+            }
+            below >= 0 -> widths[below]
+            above >= 0 -> widths[above]
+            else -> Float.NaN
+        }
+    }
+
+    /**
+     * Places one sleeve of a real garment on the arm: the sleeve's own centre line along the arm,
+     * shoulder joint to elbow, and its width across that line squeezed or stretched to the arm's
+     * width times the garment's [sleeveAllowance]. Returns false when the arm is not visible.
+     *
+     * Rotating the whole sleeve about the shoulder joint, along the joint-to-elbow anchors, swung
+     * a wide flat sleeve's underarm half across the chest when the arm hung down: on a flat-laid
+     * shirt over half its grid points landed more than 20 px inside the arm, some nearly 300 px.
+     * A photographed sleeve is a fixed width whatever arm it lands on; worn, it wraps that arm.
+     *
+     * Mirrors sleeve_matrix() in tools/preview_mesh.py. Change the two together.
+     */
+    private fun sleeveMatrix(
+        f: SleeveFrame, from: Int, to: Int, p: FloatArray, handedness: Float, allowance: Float,
+        out: Matrix
+    ): Boolean {
+        if (!visible(p, from) || !visible(p, to)) return false
+        val sx = viewX(p, from)
+        val sy = viewY(p, from)
+        val ex = viewX(p, to) - sx
+        val ey = viewY(p, to) - sy
+        val length = hypot(ex, ey)
+        val joints = hypot(viewX(p, RIGHT_SHOULDER) - viewX(p, LEFT_SHOULDER),
+            viewY(p, RIGHT_SHOULDER) - viewY(p, LEFT_SHOULDER))
+        if (length < 1f || joints < 1f) return false
+        val bx = ex / length
+        val by = ey / length
+        // Across the arm on screen, turned the same way the torso is.
+        val cx = handedness * -by
+        val cy = handedness * bx
+        val across = ARM_WIDTH_PER_JOINT * joints * allowance / f.width
+
+        src[0] = f.originX; src[1] = f.originY
+        src[2] = f.originX + f.ux * f.length; src[3] = f.originY + f.uy * f.length
+        src[4] = f.originX - f.uy * PERPENDICULAR_REACH; src[5] = f.originY + f.ux * PERPENDICULAR_REACH
+
+        dst[0] = sx; dst[1] = sy
+        dst[2] = sx + bx * length; dst[3] = sy + by * length
+        dst[4] = sx + cx * PERPENDICULAR_REACH * across; dst[5] = sy + cy * PERPENDICULAR_REACH * across
+
+        return out.setPolyToPoly(src, 0, dst, 0, 3)
     }
 
     /**
@@ -637,6 +879,30 @@ class OverlayView @JvmOverloads constructor(
             }
             j++
         }
+    }
+
+    /**
+     * Draws each measuring line, as two halves from the centre line out to the measured edges,
+     * coloured by how each half was obtained. A debug view of [BodyWidthMeter], not part of the
+     * try-on itself.
+     */
+    private fun drawBodyWidths(canvas: Canvas, w: FloatArray) {
+        val sx = imageWidth * mapping[0]
+        val sy = imageHeight * mapping[0]
+        var o = 0
+        while (o + BodyWidthMeter.STRIDE <= w.size) {
+            val quality = w[o + 6].toInt()
+            val cx = w[o] * sx + mapping[1]
+            val cy = w[o + 1] * sy + mapping[2]
+            drawHalfWidth(canvas, cx, cy, w[o + 2] * sx + mapping[1], w[o + 3] * sy + mapping[2], quality / 3)
+            drawHalfWidth(canvas, cx, cy, w[o + 4] * sx + mapping[1], w[o + 5] * sy + mapping[2], quality % 3)
+            o += BodyWidthMeter.STRIDE
+        }
+    }
+
+    private fun drawHalfWidth(canvas: Canvas, cx: Float, cy: Float, ex: Float, ey: Float, quality: Int) {
+        if (quality == BodyWidthMeter.NONE) return
+        canvas.drawLine(cx, cy, ex, ey, if (quality == BodyWidthMeter.MEASURED) measuredPaint else filledPaint)
     }
 
     private fun drawGuide(canvas: Canvas) {

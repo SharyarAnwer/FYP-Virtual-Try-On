@@ -31,7 +31,9 @@ import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 class PoseDetector private constructor(
     private val landmarker: PoseLandmarker,
     /** Which accelerator actually loaded — may differ from what was asked for. */
-    val delegateName: String
+    val delegateName: String,
+    /** Whether results carry the person segmentation mask. */
+    val masksEnabled: Boolean
 ) {
 
     companion object {
@@ -49,15 +51,24 @@ class PoseDetector private constructor(
          * rather than at inference time, so without it a bad driver is a crash rather than a
          * slower app.
          */
-        fun create(context: Context, preferred: Delegate = Delegate.CPU): PoseDetector {
-            runCatching { build(context, preferred) }
-                .onSuccess { return PoseDetector(it, preferred.name) }
+        fun create(
+            context: Context,
+            preferred: Delegate = Delegate.CPU,
+            masks: Boolean = false
+        ): PoseDetector {
+            runCatching { build(context, preferred, masks) }
+                .onSuccess { return PoseDetector(it, preferred.name, masks) }
                 .onFailure { Log.w(TAG, "Pose landmarker failed on ${preferred.name}, falling back to CPU", it) }
 
-            return PoseDetector(build(context, Delegate.CPU), Delegate.CPU.name)
+            return PoseDetector(build(context, Delegate.CPU, masks), Delegate.CPU.name, masks)
         }
 
-        private fun build(context: Context, delegate: Delegate): PoseLandmarker {
+        /**
+         * [masks] adds the person segmentation mask to every result: which pixels are the person.
+         * It comes from the same model, so it costs extra output work rather than a second model;
+         * how much is measured on device with the on-screen Mask toggle.
+         */
+        private fun build(context: Context, delegate: Delegate, masks: Boolean): PoseLandmarker {
             val baseOptions = BaseOptions.builder()
                 .setModelAssetPath(MODEL_ASSET)
                 .setDelegate(delegate)
@@ -70,6 +81,7 @@ class PoseDetector private constructor(
                 .setMinPoseDetectionConfidence(0.5f)
                 .setMinPosePresenceConfidence(0.5f)
                 .setMinTrackingConfidence(0.5f)
+                .setOutputSegmentationMasks(masks)
                 .build()
 
             return PoseLandmarker.createFromOptions(context, options)
