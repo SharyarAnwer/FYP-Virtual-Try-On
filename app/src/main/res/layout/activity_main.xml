@@ -99,6 +99,14 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 tools:text="@string/mask_off" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/fitButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                tools:text="@string/fit_chest" />
         </LinearLayout>
     </FrameLayout>
 

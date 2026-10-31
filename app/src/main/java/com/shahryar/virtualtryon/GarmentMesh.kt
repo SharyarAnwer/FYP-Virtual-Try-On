@@ -1,9 +1,12 @@
 package com.shahryar.virtualtryon
 
 import android.graphics.Bitmap
+import kotlin.math.abs
+import kotlin.math.acos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 /**
  * Where a garment's sleeve meets its body on one side, found in the photo by
@@ -12,6 +15,13 @@ import kotlin.math.roundToInt
  * the sleeve its own centre line and width; garments catalogued before they were recorded lack
  * them, and their sleeves fall back to following the shoulder-to-elbow anchors.
  */
+/** The angle in degrees between two directions. */
+internal fun degreesBetween(ax: Float, ay: Float, bx: Float, by: Float): Float {
+    val n = hypot(ax, ay) * hypot(bx, by)
+    if (n < 1e-6f) return 0f
+    return Math.toDegrees(acos(((ax * bx + ay * by) / n).coerceIn(-1f, 1f)).toDouble()).toFloat()
+}
+
 data class Armhole(
     val shoulder: Anchor,
     val armpit: Anchor,
@@ -133,17 +143,50 @@ class GarmentMesh(garment: Garment) {
         const val BLEND = 0.06f
 
         /**
-         * How far into each sleeve the torso widening fades out, in blend half-widths.
-         *
-         * Widening is full right up to the armhole and fades to nothing this far into the sleeve.
-         * Fading it across the blend band instead, in step with the torso weight, folded the mesh:
-         * an 18% push moved body vertices further than the band is wide, past the sleeve vertices
-         * beside them, and on device the folds showed as a sawtooth of dark triangles at the
-         * armpits. Spread over 3.5 half-widths, no vertex overtakes its neighbour.
+         * How far above the armpit the torso widening starts, as a fraction of shoulder-to-hip
+         * length; it is at full strength from the armpit down.
+         */
+        const val EASE_ABOVE = 0.1f
+
+        /**
+         * How far into each sleeve the torso widening fades out, in blend half-widths. With the
+         * body widened in full at the armpit, the sleeve's underside next to it must move out too,
+         * or the body's vertices overtake the sleeve's and the mesh folds into a sawtooth.
          */
         const val EASE_FADE = 3.5f
 
+        /**
+         * The chest band, for fitting the garment's body to one width (OverlayView.FitMode.CHEST):
+         * from this far below the armpit, for this much further, both as fractions of
+         * shoulder-to-hip length. Just below the armpit, where the wearer's own clothes lie
+         * closest to the body.
+         */
+        const val CHEST_START = 0.05f
+        const val CHEST_SPAN = 0.25f
+
         const val BONES = 3
+
+        /**
+         * How far the four-corner stretch of a sleeve may reach past its corners, in the corner
+         * coordinates of [sleeveU] and [sleeveV]. A little, so the cuff hem and the fabric just
+         * beyond the corners come along; not far, or a stray vertex is thrown across the body.
+         */
+        const val U_MIN = -0.1f
+        const val U_MAX = 1.05f
+        const val V_MIN = -0.1f
+        const val V_MAX = 1f
+
+        /** The torso near an armpit moves with it, fading over this x shoulder-joint width. */
+        const val LIFT_RADIUS = 0.6f
+
+        /**
+         * Points on the body side of an armhole boundary follow the torso rather than the
+         * sleeve's corners: half and half on the boundary, fully this many blend half-widths in.
+         * The side seam just below the armpit sits in the blend band, so part of each point there
+         * went with the sleeve; with the sleeve's underside now taken up under a raised arm, those
+         * points were dragged up after it and stuck out of the shirt's side as a ragged flap.
+         */
+        const val BODY_SIDE = 0.3f
 
         private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
             val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
@@ -172,15 +215,17 @@ class GarmentMesh(garment: Garment) {
         (garment.anchor("left_shoulder")!!.x + garment.anchor("right_shoulder")!!.x) / 2f
 
     /**
-     * How much of the widening each grid row receives: 0 at shoulder-joint height, rising
-     * smoothly to 1 at armpit height and staying 1 down to the hem. The shoulders therefore stay
-     * exactly where the shoulder landmarks put them.
+     * How much of the widening each grid row receives: 0 down to [EASE_ABOVE] of the torso length
+     * above the armpit, rising smoothly to 1 at the armpit, and 1 from there to the hem.
      *
-     * Full by the armpit, because the body side can show from the armpit down. A ramp that only
-     * began at the armpit was still part-way up where the body side came out from under the cuff,
-     * and the shirt pinched in below each sleeve. How far a cuff hangs below the armpit depends on
-     * the wearer's torso length - on the tester it barely does - so no ramp below the armpit is
-     * safe.
+     * Full at the armpit, so the shirt's side runs straight down from under the arm at one width.
+     * Two earlier shapes failed on device:
+     * - From the shoulder line down - a leftover from the fixed 18% widening - pushed each armhole
+     *   out with the measured width, about 40% on the tester: the torso panel spread over his
+     *   shoulders and upper arms and the underarm was stretched.
+     * - From the armpit down left the shirt at the photo's width under the arm, so its side curved
+     *   out below the armpit to the measured width, and with arms down pinched in under the cuffs.
+     * Starting just above the armpit keeps the shoulders as the shoulders put them.
      *
      * This is the garment's *shape* of widening and belongs to the garment. The *amount* is the
      * caller's input - see [widen].
@@ -189,13 +234,24 @@ class GarmentMesh(garment: Garment) {
 
     /**
      * Per vertex, how much of the widening it receives: 1 over the torso and up to the armhole,
-     * fading to 0 [EASE_FADE] blend half-widths into each sleeve. The inner part of each sleeve
-     * moves out with the widened body, as the armhole of a shirt does on a broader wearer.
+     * fading to 0 [EASE_FADE] blend half-widths into each sleeve. Sleeves take their width from the
+     * arm; only the part of each next to the armhole moves out with the widened body.
      */
     val easeWeights = FloatArray(vertexCount)
 
     /** Each grid row's height on the torso: 0 on the shoulder anchors' line, 1 on the hips'. */
     val rowT = FloatArray(rows + 1)
+
+    /** The armpits' height on the same scale as [rowT]. */
+    val armpitT: Float
+
+    /**
+     * The garment body's width across the chest band, in artwork px: the median of [torsoWidth]
+     * over the rows from [CHEST_START] to [CHEST_START] + [CHEST_SPAN] below the armpit. Set by
+     * [measureTorso]; 0 until then.
+     */
+    var chestWidth = 0f
+        private set
 
     /**
      * Width of the garment's body at each grid row, in artwork px: between its outermost body
@@ -214,6 +270,35 @@ class GarmentMesh(garment: Garment) {
      */
     val torsoWidth = FloatArray(rows + 1)
 
+    private val imageHeight = garment.imageHeight
+
+    /**
+     * Each sleeve's corners in the photo - shoulder tip, cuff outer end, cuff inner end, armpit -
+     * as x, y pairs; index 0 is the left sleeve. Null when the catalog has no cuff ends for it.
+     */
+    val sleeveCorners: Array<FloatArray?> = arrayOf(corners(garment.armholes["left"]),
+        corners(garment.armholes["right"]))
+
+    /**
+     * Per sleeve, every vertex's place between those corners: u from the shoulder towards the
+     * cuff, v from the sleeve's top edge across to its underside, so that the vertex is the
+     * bilinear blend of the four corners at (u, v). Clamped to [U_MIN]..[U_MAX], [V_MIN]..[V_MAX].
+     */
+    val sleeveU = Array(2) { FloatArray(vertexCount) }
+    val sleeveV = Array(2) { FloatArray(vertexCount) }
+
+    /** Per sleeve, how much each vertex moves with the armpit: 1 at it, 0 [LIFT_RADIUS] away. */
+    val armpitLift = Array(2) { FloatArray(vertexCount) }
+
+    /** Per sleeve, how far each vertex follows the torso instead of the sleeve; see [BODY_SIDE]. */
+    val bodySide = Array(2) { FloatArray(vertexCount) }
+
+    /** Per sleeve, the angle in degrees between its centre line and straight down the garment. */
+    val sleeveAngle = FloatArray(2)
+
+    /** Per sleeve, the winding of its corners in the photo: +1 or -1. */
+    val sleeveWinding = FloatArray(2)
+
     init {
         val jointWidth = garment.anchor("right_shoulder")!!.x - garment.anchor("left_shoulder")!!.x
         val band = BLEND * jointWidth
@@ -222,9 +307,10 @@ class GarmentMesh(garment: Garment) {
         val shoulderY = (garment.anchor("left_shoulder")!!.y + garment.anchor("right_shoulder")!!.y) / 2f
         val armpitY = (garment.armholes.getValue("left").armpit.y + garment.armholes.getValue("right").armpit.y) / 2f
         val hipY = (garment.anchor("left_hip")!!.y + garment.anchor("right_hip")!!.y) / 2f
+        armpitT = (armpitY - shoulderY) / (hipY - shoulderY)
         for (r in 0..rows) {
             val y = r * garment.imageHeight.toFloat() / rows
-            easeRamp[r] = smoothstep(shoulderY, armpitY, y)
+            easeRamp[r] = smoothstep(armpitY - EASE_ABOVE * (hipY - shoulderY), armpitY, y)
             rowT[r] = (y - shoulderY) / (hipY - shoulderY)
         }
         var v = 0
@@ -250,6 +336,83 @@ class GarmentMesh(garment: Garment) {
                 v++
             }
         }
+
+        val downX = (garment.anchor("left_hip")!!.x + garment.anchor("right_hip")!!.x -
+            garment.anchor("left_shoulder")!!.x - garment.anchor("right_shoulder")!!.x) / 2f
+        val downY = hipY - shoulderY
+        val uv = FloatArray(2)
+        for (s in 0..1) {
+            val k = sleeveCorners[s] ?: continue
+            for (i in 0 until vertexCount) {
+                inverseBilinear(source[i * 2], source[i * 2 + 1], k, uv)
+                sleeveU[s][i] = uv[0].coerceIn(U_MIN, U_MAX)
+                sleeveV[s][i] = uv[1].coerceIn(V_MIN, V_MAX)
+                val d = hypot(source[i * 2] - k[6], source[i * 2 + 1] - k[7])
+                armpitLift[s][i] = smoothstep(LIFT_RADIUS * jointWidth, 0f, d)
+                val depth = -(if (s == 0) left else right).signedDistance(source[i * 2], source[i * 2 + 1])
+                bodySide[s][i] = smoothstep(-BODY_SIDE * band, BODY_SIDE * band, depth)
+            }
+            val ax = (k[2] + k[4] - k[0] - k[6]) / 2f
+            val ay = (k[3] + k[5] - k[1] - k[7]) / 2f
+            sleeveAngle[s] = degreesBetween(ax, ay, downX, downY)
+            val cross = (k[2] - k[0]) * (k[7] - k[1]) - (k[3] - k[1]) * (k[6] - k[0])
+            sleeveWinding[s] = if (cross >= 0f) 1f else -1f
+        }
+    }
+
+    private fun corners(hole: Armhole?): FloatArray? {
+        val outer = hole?.cuffOuter ?: return null
+        val inner = hole.cuffInner ?: return null
+        return floatArrayOf(hole.shoulder.x, hole.shoulder.y, outer.x, outer.y,
+            inner.x, inner.y, hole.armpit.x, hole.armpit.y)
+    }
+
+    /**
+     * Writes into [out] the (u, v) at which the bilinear blend of corners [k] (S, O, I, A) is the
+     * point ([px], [py]). The blend is quadratic in v; of its two roots, the one that reproduces
+     * the point, preferring inside the quad, wins. Points outside the quad extrapolate.
+     *
+     * Mirrors inverse_bilinear() in tools/preview_mesh.py. Change them together.
+     */
+    private fun inverseBilinear(px: Float, py: Float, k: FloatArray, out: FloatArray) {
+        val ex = k[2] - k[0]; val ey = k[3] - k[1]
+        val fx = k[6] - k[0]; val fy = k[7] - k[1]
+        val gx = k[0] - k[2] + k[4] - k[6]; val gy = k[1] - k[3] + k[5] - k[7]
+        val hx = px - k[0]; val hy = py - k[1]
+        val k2 = gx * fy - gy * fx
+        val k1 = ex * fy - ey * fx + hx * gy - hy * gx
+        val k0 = hx * ey - hy * ex
+        var bestErr = Float.POSITIVE_INFINITY
+        val roots = if (abs(k2) < 1e-6f) floatArrayOf(-k0 / k1) else {
+            val disc = sqrt(max(k1 * k1 - 4f * k0 * k2, 0f))
+            floatArrayOf((-k1 - disc) / (2f * k2), (-k1 + disc) / (2f * k2))
+        }
+        for (v in roots) {
+            val dx = ex + v * gx
+            val dy = ey + v * gy
+            val u = if (abs(dx) > abs(dy)) (hx - fx * v) / dx else (hy - fy * v) / dy
+            val bx = (1 - u) * (1 - v) * k[0] + u * (1 - v) * k[2] + u * v * k[4] + (1 - u) * v * k[6]
+            val by = (1 - u) * (1 - v) * k[1] + u * (1 - v) * k[3] + u * v * k[5] + (1 - u) * v * k[7]
+            val err = hypot(bx - px, by - py) + 50f * (max(0f, -u) + max(0f, u - 1) + max(0f, -v) + max(0f, v - 1))
+            if (err < bestErr) {
+                bestErr = err
+                out[0] = u
+                out[1] = v
+            }
+        }
+    }
+
+    /**
+     * Where [widen] moves a point on an armhole boundary, as an x: its ease weight there is 1.
+     * Row amounts are interpolated, as for the grid itself. An armpit moves out with the body's
+     * full width; a shoulder tip, well above the armpit, stays put.
+     */
+    fun widenOnBoundaryX(x: Float, y: Float, amount: FloatArray): Float {
+        val f = (y / imageHeight * rows).coerceIn(0f, rows.toFloat())
+        val r0 = f.toInt().coerceAtMost(rows - 1)
+        val w = f - r0
+        val e = (1 - w) * amount[r0] * easeRamp[r0] + w * amount[r0 + 1] * easeRamp[r0 + 1]
+        return x + (x - centreX) * e
     }
 
     /**
@@ -257,8 +420,8 @@ class GarmentMesh(garment: Garment) {
      *
      * [amount] holds one widening fraction per grid row (0.18 = 18% wider, -0.2 = 20% narrower),
      * scaled by [easeRamp]. Each vertex moves away from the centre line in proportion to its
-     * [easeWeights] entry, so the torso widens or narrows and carries the inner part of each
-     * sleeve with it, while the rest of each sleeve is left to its own bone.
+     * [easeWeights] entry, so the torso below the armpits widens or narrows while the armholes and
+     * sleeves are left to the shoulders and arms.
      *
      * The amount is an input on purpose. The garment's width otherwise comes only from the
      * distance between the shoulder joints, which says nothing about how broad the wearer is
@@ -297,6 +460,11 @@ class GarmentMesh(garment: Garment) {
             val above = if (r > 0) torsoWidth[r - 1] else 0f
             torsoWidth[r] = if (width < (1f - HEM_DROP) * above) above else width
         }
+        val band = (0..rows)
+            .filter { rowT[it] in (armpitT + CHEST_START)..(armpitT + CHEST_START + CHEST_SPAN) && torsoWidth[it] >= 1f }
+            .map { torsoWidth[it] }
+            .sorted()
+        chestWidth = if (band.isEmpty()) 0f else band[band.size / 2]
     }
 
     /** Whether pixel [x] of a row at height [py] is the garment's body: opaque, not sleeve. */

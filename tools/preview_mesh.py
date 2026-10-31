@@ -42,10 +42,11 @@ MESH_CELL = 16
 # explains the GPU driver crash this avoids).
 MAX_VERTICES = 3600
 BLEND = 0.06
-# The app fits each garment row to the wearer's torso width, measured live (BodyWidthMeter +
-# OverlayView.fitToBody). The preview has no wearer, so it stands in a torso this many times the
-# shoulder-joint width at every height - about what the tester measured with arms down, in a
-# loose top - and fits to that the same way.
+# The app fits the garment's body to the wearer's torso width, measured live (BodyWidthMeter +
+# OverlayView.fitToBody), in one of three modes (OverlayView.FitMode: chest, rows, off). The
+# preview has no wearer, so it stands in a torso this many times the shoulder-joint width at every
+# height - about what the tester measured with arms down, in a loose top. Being the same at every
+# height, the stand-in gives the same result in "chest" and "rows" modes.
 BODY_WIDTH_PER_JOINT = 1.25
 # OverlayView.fitAllowance and its limits.
 FIT_ALLOWANCE = {"slim": 1.03, "regular": 1.08, "loose": 1.15}
@@ -57,6 +58,16 @@ MIN_EASE, MAX_EASE = -0.6, 1.0
 # the cuff, which is 1.2 arm widths. "slim" and "loose" are judgement, not measured.
 ARM_WIDTH_PER_JOINT = 0.24
 SLEEVE_ALLOWANCE = {"slim": 1.1, "regular": 1.2, "loose": 1.4}
+
+# Four-corner sleeve fit (OverlayView.fitSleeve, GarmentMesh sleeve corners). Change together.
+ARMPIT_TUCK = 0.18       # armpit target below the arm's line when raised, x shoulder-joint width
+RISE_DEG = 30.0          # fully fitted this many degrees past the photo's own sleeve angle
+LIFT_RADIUS = 0.6        # torso near the armpit lifts with it, fading over this x garment joint width
+U_MIN, U_MAX, V_MIN, V_MAX = -0.1, 1.05, -0.1, 1.0   # reach of the stretch past the corners
+# Points on the body side of the armhole boundary follow the torso rather than the sleeve's
+# corners: half and half on the boundary, fully so this many blend half-widths in
+# (GarmentMesh.BODY_SIDE). Wider let the side seam's blend points stray towards the sleeve.
+BODY_SIDE = 0.3
 HEM_DROP = 0.1       # GarmentMesh.HEM_DROP
 
 # Test body, built from the proportions measured on device (see garment_points.py).
@@ -197,6 +208,156 @@ def sleeve_matrix(entry, side, view, handedness):
     return ((linear[0, 0], linear[0, 1], shift[0]), (linear[1, 0], linear[1, 1], shift[1]))
 
 
+def sleeve_corners(entry, side):
+    """The sleeve's corners in the photo: shoulder tip S, cuff outer O, cuff inner I, armpit A."""
+    h = entry["armholes"][side]
+    p = lambda d: np.array([d["x"], d["y"]], float)
+    if "cuffOuter" not in h:
+        return None
+    return p(h["shoulder"]), p(h["cuffOuter"]), p(h["cuffInner"]), p(h["armpit"])
+
+
+def bilinear(u, v, S, O, I, A):
+    u = u[:, None]
+    v = v[:, None]
+    return (1 - u) * (1 - v) * S + u * (1 - v) * O + u * v * I + (1 - u) * v * A
+
+
+def inverse_bilinear(p, S, O, I, A):
+    """
+    Each point's place between the four corners: (u, v) with p = bilinear(u, v, S, O, I, A), u
+    running shoulder to cuff and v across, from the sleeve's top edge to its underside. Points
+    outside the quad get values outside 0..1, which are then clamped (GarmentMesh.sleeveU/V).
+    """
+    cross = lambda a, b: a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+    e, f, g = O - S, A - S, S - O + I - A
+    h = p - S
+    k2 = cross(g, f)
+    k1 = cross(e, f) + cross(h, np.broadcast_to(g, h.shape))
+    k0 = cross(h, np.broadcast_to(e, h.shape))
+    if abs(k2) < 1e-6:
+        roots = [-k0 / k1]
+    else:
+        disc = np.sqrt(np.maximum(k1 * k1 - 4 * k0 * k2, 0))
+        roots = [(-k1 - disc) / (2 * k2), (-k1 + disc) / (2 * k2)]
+    best = None
+    for v in roots:
+        den = e[None, :] + v[:, None] * g[None, :]
+        use_x = np.abs(den[:, 0]) > np.abs(den[:, 1])
+        u = np.where(use_x, (h[:, 0] - f[0] * v) / np.where(use_x, den[:, 0], 1),
+                     (h[:, 1] - f[1] * v) / np.where(use_x, 1, den[:, 1]))
+        err = (np.linalg.norm(bilinear(u, v, S, O, I, A) - p, axis=1)
+               + 50 * (np.maximum(0, -u) + np.maximum(0, u - 1) + np.maximum(0, -v) + np.maximum(0, v - 1)))
+        if best is None:
+            best = [u, v, err]
+        else:
+            take = err < best[2]
+            best = [np.where(take, u, best[0]), np.where(take, v, best[1]), np.where(take, err, best[2])]
+    return best[0], best[1]
+
+
+def sleeve_uv(entry, side, points):
+    """
+    Clamped (u, v) for the four-corner stretch, and how far each point lies on the body side of
+    the armhole boundary: 0.5 on it, 1 at BODY_SIDE blend half-widths in, 0 as far out
+    (GarmentMesh.sleeveU/V/bodySide).
+    """
+    u, v = inverse_bilinear(points, *sleeve_corners(entry, side))
+    band = BODY_SIDE * BLEND * joint_width(entry)
+    depth = -signed_distance(points, side_boundary(entry, side), -1 if side == "left" else 1)
+    return np.clip(u, U_MIN, U_MAX), np.clip(v, V_MIN, V_MAX), smoothstep(-band, band, depth)
+
+
+def degrees_between(a, b):
+    c = float(a @ b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+
+def fit_sleeve(entry, texture, side, view, torso, handedness):
+    """
+    The four-corner fit for one sleeve (OverlayView.fitSleeve): how far it applies, t in 0..1,
+    the corners' targets on the body, and how far the armpit moved. None when it does not apply.
+
+    The shoulder tip stays on the torso, so the seam cannot open; the cuff's two ends sit across
+    the arm at its width times the sleeve allowance; the armpit slides from where the torso puts it
+    up to just under the arm as the arm rises. Turning the photo's hanging sleeve as a whole about
+    the shoulder left it as tall as it hangs - a box above the arm - with its underside flapping
+    below. t rises from 0 at the sleeve's own angle in the photo, so a resting arm is unchanged.
+    """
+    corners = sleeve_corners(entry, side)
+    if corners is None:
+        return None
+    S, O, I, A = corners
+    a = {k: np.array([v["x"], v["y"]], float) for k, v in entry["anchors"].items()}
+    vb = {k: np.array(v, float) for k, v in view.items()}
+    J, E = vb[f"{side}_shoulder"], vb[f"{side}_elbow"]
+    length_b = np.linalg.norm(E - J)
+    if length_b < 1:
+        return None
+    b = (E - J) / length_b
+    down_g = (a["left_hip"] + a["right_hip"] - a["left_shoulder"] - a["right_shoulder"]) / 2
+    down_b = (vb["left_hip"] + vb["right_hip"] - vb["left_shoulder"] - vb["right_shoulder"]) / 2
+    root = (S + A) / 2
+    cuff = (O + I) / 2
+    axis = (cuff - root) / np.linalg.norm(cuff - root)
+    t = float(smoothstep(0.0, 1.0, np.clip((degrees_between(b, down_b) - degrees_between(axis, down_g))
+                                           / RISE_DEG, 0.0, 1.0)))
+    if t <= 0:
+        return None
+
+    at = lambda q: apply_all(torso, widen(entry, q[None], fitted_ease(entry, texture, q[None])))[0]
+    S_t, A0 = at(S), at(A)
+    c = np.array([-b[1], b[0]])
+    if (A0 - J) @ c > 0:
+        c = -c                                                  # away from the armpit
+    origin = root + ((a[f"{side}_shoulder"] - root) @ axis) * axis
+    along = (cuff - origin) @ axis * length_b / ((a[f"{side}_elbow"] - origin) @ axis)
+    joints_b = np.linalg.norm(vb["right_shoulder"] - vb["left_shoulder"])
+    half = 0.5 * ARM_WIDTH_PER_JOINT * joints_b * SLEEVE_ALLOWANCE.get(entry.get("fitStyle"), 1.2)
+    C = J + b * along
+    O_t, I_t = C + c * half, C - c * half
+    # Straight up the torso's side, not across it: towards the tuck point only along the body's
+    # own up-down line, so the shirt keeps its fitted width under the arm.
+    down = down_b / np.linalg.norm(down_b)
+    A_t = A0 + t * ((J - c * ARMPIT_TUCK * joints_b - A0) @ down) * down
+
+    # A twisted target - an arm folded across the body, say - would fold the sleeve over itself.
+    cross = lambda p, q: p[0] * q[1] - p[1] * q[0]
+    winding = lambda P: [cross(P[1] - P[0], P[3] - P[0]), cross(P[2] - P[1], P[0] - P[1]),
+                         cross(P[3] - P[2], P[1] - P[2]), cross(P[0] - P[3], P[2] - P[3])]
+    want = np.sign(winding((S, O, I, A))[0]) * handedness
+    if any(np.sign(x) != want for x in winding((S_t, O_t, I_t, A_t))):
+        return None
+    return t, (S_t, O_t, I_t, A_t), A_t - A0
+
+
+def place(entry, texture, src, weights, view):
+    """Every grid point's position on the body: the bone blend, with each sleeve fitted by its corners."""
+    widened = widen(entry, src, fitted_ease(entry, texture, src))
+    mats = bone_matrices(entry, view)
+    (ta, tb, _), (td, te, _) = mats[0]
+    handedness = 1.0 if ta * te - tb * td >= 0 else -1.0
+    placed = [apply_all(m, widened) for m in mats]
+    fits = {}
+    # The torso first, lifted with both armpits; then each sleeve, whose points outside the sleeve
+    # on the body side follow that lifted torso. Sent to the sleeve's underside instead, the side
+    # seam's blend points just below the armpit were dragged up under the arm and stuck out of
+    # the shirt's side as a ragged flap.
+    for k, side in ((1, "left"), (2, "right")):
+        fit = fit_sleeve(entry, texture, side, view, mats[0], handedness)
+        if fit is None:
+            continue
+        fits[k] = (side, fit)
+        A = sleeve_corners(entry, side)[3]
+        lift = smoothstep(LIFT_RADIUS * joint_width(entry), 0.0, np.linalg.norm(src - A, axis=1))
+        placed[0] = placed[0] + lift[:, None] * fit[2][None, :]
+    for k, (side, (t, targets, moved)) in fits.items():
+        u, v, outside = sleeve_uv(entry, side, src)
+        target = (1 - outside[:, None]) * bilinear(u, v, *targets) + outside[:, None] * placed[0]
+        placed[k] = (1 - t) * placed[k] + t * target
+    return sum(weights[:, k:k + 1] * placed[k] for k in range(3))
+
+
 def bone_matrices(entry, view):
     a = {k: (v["x"], v["y"]) for k, v in entry["anchors"].items()}
     mid = lambda p: ((p["left_hip"][0] + p["right_hip"][0]) / 2, (p["left_hip"][1] + p["right_hip"][1]) / 2)
@@ -219,15 +380,17 @@ def apply_all(matrix, pts):
     return np.stack([a * pts[:, 0] + b * pts[:, 1] + c, d * pts[:, 0] + e * pts[:, 1] + f], axis=1)
 
 
+EASE_ABOVE = 0.1     # GarmentMesh.EASE_ABOVE, x shoulder-to-hip length above the armpit
 EASE_FADE = 3.5      # GarmentMesh.EASE_FADE, in blend half-widths
 
 
 def ease_ramp(entry, ys):
-    """0 at shoulder-joint height rising to 1 at armpit height (GarmentMesh.easeRamp)."""
+    """0 down to EASE_ABOVE above the armpit, 1 from the armpit down (GarmentMesh.easeRamp)."""
     a, holes = entry["anchors"], entry["armholes"]
     shoulder_y = (a["left_shoulder"]["y"] + a["right_shoulder"]["y"]) / 2
+    hip_y = (a["left_hip"]["y"] + a["right_hip"]["y"]) / 2
     armpit_y = (holes["left"]["armpit"]["y"] + holes["right"]["armpit"]["y"]) / 2
-    return smoothstep(shoulder_y, armpit_y, ys)
+    return smoothstep(armpit_y - EASE_ABOVE * (hip_y - shoulder_y), armpit_y, ys)
 
 
 def ease_weights(entry, points):
@@ -270,7 +433,7 @@ def fitted_ease(entry, texture, points):
 
 def widen(entry, points, amount):
     """
-    Torso, and the inner part of each sleeve, pushed away from the centre line (GarmentMesh.widen).
+    The torso below the armpits pushed away from the centre line (GarmentMesh.widen).
     `amount` is one widening fraction, or one per point.
     """
     a = entry["anchors"]
@@ -348,7 +511,7 @@ def render(entry, texture, sleeves, left_deg, right_deg):
     cols, rows, src = grid(w, h)
     weights = vertex_weights(entry, src)
     view = body(left_deg, right_deg)
-    dst = skin(widen(entry, src, fitted_ease(entry, texture, src)), weights, bone_matrices(entry, view))
+    dst = place(entry, texture, src, weights, view)
     canvas = checkerboard(*CANVAS).convert("RGB")
     canvas = draw_mesh(canvas, texture, cols, rows, src, dst)
     canvas = draw_mesh(canvas, sleeves, cols, rows, src, dst)

@@ -102,6 +102,15 @@ class OverlayView @JvmOverloads constructor(
         const val ARM_WIDTH_PER_JOINT = 0.24f
 
         /**
+         * Where a raised arm's armpit sits: this x shoulder-joint width below the arm's line,
+         * at the shoulder. Judgement, set once for every garment; see [fitSleeve].
+         */
+        const val ARMPIT_TUCK = 0.18f
+
+        /** The four-corner fit is complete this many degrees past the photo's own sleeve angle. */
+        const val RISE_DEG = 30f
+
+        /**
          * How much wider than the arm a sleeve is drawn, by fit style. "regular" is the pink polo's:
          * its photo shows the sleeve as worn, 0.29 joint widths at the cuff, which is 1.2 arm
          * widths. "slim" and "loose" are judgement, not measured.
@@ -213,6 +222,16 @@ class OverlayView @JvmOverloads constructor(
 
         /** The wearer's torso width at each [BodyWidthMeter.LEVELS], in view px; NaN if unknown. */
         val levelWidths = FloatArray(BodyWidthMeter.LEVELS.size)
+        val chestScratch = FloatArray(BodyWidthMeter.LEVELS.size)
+
+        /**
+         * [fitSleeve] output per sleeve: the four corner targets (x, y pairs, 8 per sleeve), how
+         * far the armpit moved (2 per sleeve) and how far the fit applies.
+         */
+        val cornerTargets = FloatArray(16)
+        val armpitMove = FloatArray(4)
+        val fitAmount = FloatArray(2)
+        val scratch = FloatArray(4)
 
         companion object {
             fun from(garment: Garment, layers: GarmentLayers): MeshRender? {
@@ -246,7 +265,9 @@ class OverlayView @JvmOverloads constructor(
     private class SleeveFrame(
         val originX: Float, val originY: Float,
         val ux: Float, val uy: Float,
-        val length: Float, val width: Float
+        val length: Float, val width: Float,
+        /** From [originX], [originY] along the centre line to the cuff's middle. */
+        val cuffAlong: Float
     ) {
         companion object {
             fun of(hole: Armhole?, joint: Anchor?, elbow: Anchor?): SleeveFrame? {
@@ -267,7 +288,8 @@ class OverlayView @JvmOverloads constructor(
                 val length = (elbow.x - ox) * ux + (elbow.y - oy) * uy
                 val width = abs((outer.x - inner.x) * -uy + (outer.y - inner.y) * ux)
                 if (length < 1f || width < 1f) return null
-                return SleeveFrame(ox, oy, ux, uy, length, width)
+                val cuffAlong = ((outer.x + inner.x) / 2f - ox) * ux + ((outer.y + inner.y) / 2f - oy) * uy
+                return SleeveFrame(ox, oy, ux, uy, length, width, cuffAlong)
             }
         }
     }
@@ -361,6 +383,33 @@ class OverlayView @JvmOverloads constructor(
 
     /** Latest body-width snapshot from [BodyWidthMeter], or null. Drawn with the skeleton. */
     @Volatile private var bodyWidths: FloatArray? = null
+
+    /**
+     * How a real garment's body is fitted to the wearer's measured width (M3.6). All three are
+     * kept so they can be compared on device; the Fit button switches between them.
+     */
+    enum class FitMode {
+        /**
+         * One width for the whole body: the wearer's width across the chest, just below the
+         * armpits, applied to every row. The garment keeps its own shape below that - straight
+         * sides stay straight - rather than following the wearer's clothes. Fitted per row, a
+         * loose kameez that flares from the armpits made the polo flare and bulge with it.
+         */
+        CHEST,
+
+        /** Every row fitted to the wearer's width at that height, clothes included. */
+        ROWS,
+
+        /** No fitting: the garment at its photo's own proportions, scaled to the shoulders. */
+        OFF
+    }
+
+    /** See [FitMode]. */
+    @Volatile var fitMode: FitMode = FitMode.CHEST
+        set(value) {
+            field = value
+            postInvalidate()
+        }
 
     /**
      * Mean widening applied over the torso's middle rows in the last frame, for the perf log;
@@ -637,6 +686,44 @@ class OverlayView @JvmOverloads constructor(
         m.mesh.widen(m.easeAmount, m.widened)
         for (k in 0 until GarmentMesh.BONES) m.bones[k].mapPoints(m.placed[k], m.widened)
 
+        // The torso first, lifted with both armpits; then each sleeve, whose points on the body
+        // side of its armhole follow that lifted torso - see GarmentMesh.BODY_SIDE.
+        val torso = m.placed[0]
+        for (side in 0..1) {
+            m.fitAmount[side] = fitSleeve(m, side, p, handedness)
+            if (m.fitAmount[side] <= 0f) continue
+            val lift = m.mesh.armpitLift[side]
+            val mx = m.armpitMove[side * 2]
+            val my = m.armpitMove[side * 2 + 1]
+            for (v in 0 until m.mesh.vertexCount) {
+                torso[v * 2] += lift[v] * mx
+                torso[v * 2 + 1] += lift[v] * my
+            }
+        }
+        for (side in 0..1) {
+            val t = m.fitAmount[side]
+            if (t <= 0f) continue
+            val placed = m.placed[side + 1]
+            val u = m.mesh.sleeveU[side]
+            val vv = m.mesh.sleeveV[side]
+            val body = m.mesh.bodySide[side]
+            val c = m.cornerTargets
+            val o = side * 8
+            for (v in 0 until m.mesh.vertexCount) {
+                val a = (1 - u[v]) * (1 - vv[v])
+                val b = u[v] * (1 - vv[v])
+                val d = u[v] * vv[v]
+                val e = (1 - u[v]) * vv[v]
+                val x = v * 2
+                val fx = a * c[o] + b * c[o + 2] + d * c[o + 4] + e * c[o + 6]
+                val fy = a * c[o + 1] + b * c[o + 3] + d * c[o + 5] + e * c[o + 7]
+                val tx = fx + body[v] * (torso[x] - fx)
+                val ty = fy + body[v] * (torso[x + 1] - fy)
+                placed[x] += t * (tx - placed[x])
+                placed[x + 1] += t * (ty - placed[x + 1])
+            }
+        }
+
         val w = m.mesh.weights
         val t = m.placed[0]
         val l = m.placed[1]
@@ -671,6 +758,11 @@ class OverlayView @JvmOverloads constructor(
      * last fit rather than jumping. Requires [computeTorso] to have run this frame.
      */
     private fun fitToBody(m: MeshRender) {
+        if (fitMode == FitMode.OFF) {
+            m.easeAmount.fill(0f)
+            fittedEase = 0f
+            return
+        }
         val body = bodyWidths ?: return
         val levels = BodyWidthMeter.LEVELS
         val stride = BodyWidthMeter.STRIDE
@@ -707,6 +799,11 @@ class OverlayView @JvmOverloads constructor(
         val rowScale = hypot(matrixValues[Matrix.MSCALE_X], matrixValues[Matrix.MSKEW_Y])
         if (rowScale <= 0f) return
 
+        if (fitMode == FitMode.CHEST) {
+            fitToChest(m, rowScale)
+            return
+        }
+
         var sum = 0f
         var count = 0
         for (r in 0..m.mesh.rows) {
@@ -720,6 +817,29 @@ class OverlayView @JvmOverloads constructor(
             }
         }
         fittedEase = if (count > 0) sum / count else Float.NaN
+    }
+
+    /**
+     * [FitMode.CHEST]: one widening for every row, making the garment's chest as wide as the
+     * wearer's - the median of the measured levels in the chest band below the armpit - times
+     * the fit allowance. With no level measured in the band, the last fit is kept.
+     */
+    private fun fitToChest(m: MeshRender, rowScale: Float) {
+        val levels = BodyWidthMeter.LEVELS
+        val from = m.mesh.armpitT + GarmentMesh.CHEST_START
+        val to = from + GarmentMesh.CHEST_SPAN
+        var n = 0
+        for (k in levels.indices) {
+            if (levels[k] in from..to && !m.levelWidths[k].isNaN()) m.chestScratch[n++] = m.levelWidths[k]
+        }
+        if (n == 0 || m.mesh.chestWidth < 1f) return
+        java.util.Arrays.sort(m.chestScratch, 0, n)
+        val bodyChest = m.chestScratch[n / 2]
+        val e = (bodyChest * m.allowance / (m.mesh.chestWidth * rowScale) - 1f).coerceIn(MIN_EASE, MAX_EASE)
+        for (r in 0..m.mesh.rows) {
+            m.easeAmount[r] = if (m.mesh.torsoWidth[r] < 1f) 0f else e
+        }
+        fittedEase = e
     }
 
     /**
@@ -744,6 +864,96 @@ class OverlayView @JvmOverloads constructor(
             above >= 0 -> widths[above]
             else -> Float.NaN
         }
+    }
+
+    /**
+     * Fits one sleeve ([side] 0 = left) to the arm by its four corners, for an arm raised past the
+     * sleeve's own angle in the photo. Returns how far the fit applies, 0..1 - 0 leaves the sleeve
+     * where [sleeveMatrix] put it - and fills its entries of [MeshRender.cornerTargets] and
+     * [MeshRender.armpitMove].
+     *
+     * Turning the photo's hanging sleeve as a whole about the shoulder kept it as tall as it hangs:
+     * with the arm raised it stood above the arm like a box, and its underside hung below the arm
+     * as a dark flap. Instead each corner is placed on the body. The shoulder tip stays where the
+     * torso puts it, so the seam cannot open. The cuff's two ends sit across the arm at its width
+     * times the sleeve allowance. The armpit slides straight up the torso's side, from where the
+     * torso puts it to [ARMPIT_TUCK] below the arm's line, and the torso nearest it follows, so the underarm
+     * fabric is taken up into the armpit rather than left hanging. Every vertex keeps its place
+     * between the four corners, so the photo's texture and shading come with it.
+     *
+     * The fit fades in over [RISE_DEG] above the sleeve's angle in the photo: at rest, nothing
+     * changes. It is skipped when the corners would land twisted - an arm folded across the body.
+     *
+     * Mirrors fit_sleeve() in tools/preview_mesh.py. Change the two together.
+     */
+    private fun fitSleeve(m: MeshRender, side: Int, p: FloatArray, handedness: Float): Float {
+        val k = m.mesh.sleeveCorners[side] ?: return 0f
+        val frame = (if (side == 0) m.leftSleeve else m.rightSleeve) ?: return 0f
+        val joint = if (side == 0) LEFT_SHOULDER else RIGHT_SHOULDER
+        val elbow = if (side == 0) LEFT_ELBOW else RIGHT_ELBOW
+        if (!visible(p, joint) || !visible(p, elbow)) return 0f
+
+        val jx = viewX(p, joint)
+        val jy = viewY(p, joint)
+        val length = hypot(viewX(p, elbow) - jx, viewY(p, elbow) - jy)
+        if (length < 1f) return 0f
+        val bx = (viewX(p, elbow) - jx) / length
+        val by = (viewY(p, elbow) - jy) / length
+        val downX = (viewX(p, LEFT_HIP) + viewX(p, RIGHT_HIP) - viewX(p, LEFT_SHOULDER) - viewX(p, RIGHT_SHOULDER)) / 2f
+        val downY = (viewY(p, LEFT_HIP) + viewY(p, RIGHT_HIP) - viewY(p, LEFT_SHOULDER) - viewY(p, RIGHT_SHOULDER)) / 2f
+        val rise = ((degreesBetween(bx, by, downX, downY) - m.mesh.sleeveAngle[side]) / RISE_DEG).coerceIn(0f, 1f)
+        val t = rise * rise * (3f - 2f * rise)
+        if (t <= 0f) return 0f
+
+        // Shoulder tip and armpit where the widened torso puts them.
+        val s = m.scratch
+        s[0] = m.mesh.widenOnBoundaryX(k[0], k[1], m.easeAmount); s[1] = k[1]
+        s[2] = m.mesh.widenOnBoundaryX(k[6], k[7], m.easeAmount); s[3] = k[7]
+        torsoMatrix.mapPoints(s)
+        val a0x = s[2]
+        val a0y = s[3]
+
+        // Across the arm, pointing away from the armpit.
+        var cx = -by
+        var cy = bx
+        if ((a0x - jx) * cx + (a0y - jy) * cy > 0f) {
+            cx = -cx
+            cy = -cy
+        }
+        val joints = hypot(viewX(p, RIGHT_SHOULDER) - viewX(p, LEFT_SHOULDER),
+            viewY(p, RIGHT_SHOULDER) - viewY(p, LEFT_SHOULDER))
+        val half = 0.5f * ARM_WIDTH_PER_JOINT * joints * m.sleeveAllowance
+        val along = frame.cuffAlong * length / frame.length
+        val mx = jx + bx * along
+        val my = jy + by * along
+
+        val c = m.cornerTargets
+        val b = side * 8
+        c[b] = s[0]; c[b + 1] = s[1]
+        c[b + 2] = mx + cx * half; c[b + 3] = my + cy * half
+        c[b + 4] = mx - cx * half; c[b + 5] = my - cy * half
+        // The armpit rises straight up the torso's side, towards the tuck point only along the
+        // body's own up-down line. Moving it the whole way to the tuck point - up and inwards,
+        // under the shoulder joint - pulled the shirt's side in with it, and on device the shirt
+        // pinched in below each raised arm and showed the wearer's own clothes there.
+        val downLength = hypot(downX, downY)
+        val ux = downX / downLength
+        val uy = downY / downLength
+        val climb = (jx - cx * ARMPIT_TUCK * joints - a0x) * ux + (jy - cy * ARMPIT_TUCK * joints - a0y) * uy
+        c[b + 6] = a0x + t * climb * ux
+        c[b + 7] = a0y + t * climb * uy
+
+        val want = m.mesh.sleeveWinding[side] * handedness
+        for (i in 0 until 4) {
+            val o = b + i * 2
+            val n = b + ((i + 1) % 4) * 2
+            val q = b + ((i + 3) % 4) * 2
+            val cross = (c[n] - c[o]) * (c[q + 1] - c[o + 1]) - (c[n + 1] - c[o + 1]) * (c[q] - c[o])
+            if (cross * want <= 0f) return 0f
+        }
+        m.armpitMove[side * 2] = c[b + 6] - a0x
+        m.armpitMove[side * 2 + 1] = c[b + 7] - a0y
+        return t
     }
 
     /**

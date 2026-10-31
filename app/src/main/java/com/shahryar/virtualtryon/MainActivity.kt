@@ -153,6 +153,11 @@ class MainActivity : AppCompatActivity() {
         binding.switchButton.setOnClickListener { toggleLens() }
         binding.delegateButton.setOnClickListener { toggleDelegate() }
         binding.maskButton.setOnClickListener { toggleMasks() }
+        binding.fitButton.setOnClickListener {
+            val modes = OverlayView.FitMode.values()
+            binding.overlayView.fitMode = modes[(binding.overlayView.fitMode.ordinal + 1) % modes.size]
+            updateFitButton()
+        }
         binding.garmentButton.setOnClickListener { cycleGarment() }
         binding.skeletonButton.setOnClickListener {
             binding.overlayView.showSkeleton = !binding.overlayView.showSkeleton
@@ -164,6 +169,7 @@ class MainActivity : AppCompatActivity() {
 
         updateDelegateButton()
         updateMaskButton()
+        updateFitButton()
         updateGarmentButton()
         updateSkeletonButton()
         renderStats(0.0, 0.0, 0, 0)
@@ -346,10 +352,10 @@ class MainActivity : AppCompatActivity() {
         if (now - lastPerfLogAtMs < PERF_LOG_INTERVAL_MS) return
         lastPerfLogAtMs = now
         Log.i(TAG, String.format(Locale.US,
-            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d ease=%.2f pose=%s",
+            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s ease=%.2f pose=%s",
             perf.fps, perf.latencyMs, perf.prepMs, perf.inferenceMs, perf.unpackMs, perf.measureMs,
             if (masksActive) "on" else "off", bodyWidth.measuredLevels, BodyWidthMeter.LEVELS.size,
-            binding.overlayView.fittedEase, poseTracked))
+            binding.overlayView.fitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase, poseTracked))
     }
 
     /**
@@ -497,6 +503,14 @@ class MainActivity : AppCompatActivity() {
         requestedMasks = !requestedMasks
         updateMaskButton()
         loadDetector()
+    }
+
+    private fun updateFitButton() {
+        binding.fitButton.setText(when (binding.overlayView.fitMode) {
+            OverlayView.FitMode.CHEST -> R.string.fit_chest
+            OverlayView.FitMode.ROWS -> R.string.fit_rows
+            OverlayView.FitMode.OFF -> R.string.fit_off
+        })
     }
 
     private fun updateMaskButton() {

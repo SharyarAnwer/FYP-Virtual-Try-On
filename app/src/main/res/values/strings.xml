@@ -9,4 +9,7 @@
     <string name="skeleton_off">Skeleton off</string>
     <string name="mask_on">Mask on</string>
     <string name="mask_off">Mask off</string>
+    <string name="fit_chest">Fit: chest</string>
+    <string name="fit_rows">Fit: rows</string>
+    <string name="fit_off">Fit: off</string>
 </resources>
