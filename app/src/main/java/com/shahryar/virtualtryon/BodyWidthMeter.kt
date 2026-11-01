@@ -115,6 +115,24 @@ class BodyWidthMeter {
         private const val MIN_VISIBILITY = 0.5f
 
         /** Per arm: shoulder, elbow, wrist, little-finger knuckle, index knuckle. */
+        /**
+         * Where along each upper arm its thickness is measured, as fractions of the way from the
+         * shoulder to the elbow. Away from the shoulder, where the arm joins the torso and the mask
+         * cannot tell one from the other.
+         */
+        val ARM_SAMPLES = floatArrayOf(0.5f, 0.65f, 0.8f)
+
+        /** Furthest an arm's edge can be from its centre line, as a fraction of shoulder width. */
+        const val MAX_ARM_HALF = 0.5f
+
+        /**
+         * Arm snapshot layout per arm (left, then right): outer half-thickness, inner half-thickness
+         * (away from and towards the body, as fractions of the mask's width, NaN if unknown); then
+         * per sample the outer and inner edge points, x0, y0, x1, y1 (normalised image coordinates,
+         * NaN where not measured).
+         */
+        val ARM_STRIDE = 2 + ARM_SAMPLES.size * 4
+
         private val ARMS = arrayOf(
             intArrayOf(LEFT_SHOULDER, LEFT_ELBOW, LEFT_WRIST, LEFT_PINKY, LEFT_INDEX),
             intArrayOf(RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_WRIST, RIGHT_PINKY, RIGHT_INDEX)
@@ -129,6 +147,18 @@ class BodyWidthMeter {
     private val leftStale = IntArray(LEVELS.size)
     private val rightStale = IntArray(LEVELS.size)
 
+    /** Smoothed arm half-thicknesses per arm, outer and inner, in mask pixels; NaN if unknown. */
+    private val armOuter = FloatArray(2) { Float.NaN }
+    private val armInner = FloatArray(2) { Float.NaN }
+    private val armStale = IntArray(2)
+
+    /**
+     * The arms' thickness from the last [measure], laid out as [ARM_STRIDE] describes, or null.
+     * Read on the analysis thread right after [measure], then handed to the overlay.
+     */
+    var lastArms: FloatArray? = null
+        private set
+
     /** Number of lines with both sides measured in the last frame, for the on-screen stats. */
     @Volatile var measuredLevels = 0
         private set
@@ -139,6 +169,10 @@ class BodyWidthMeter {
         rightHalf.fill(Float.NaN)
         leftStale.fill(0)
         rightStale.fill(0)
+        armOuter.fill(Float.NaN)
+        armInner.fill(Float.NaN)
+        armStale.fill(0)
+        lastArms = null
         measuredLevels = 0
     }
 
@@ -217,7 +251,105 @@ class BodyWidthMeter {
             out[o + 6] = (leftQuality * 3 + rightQuality).toFloat()
         }
         measuredLevels = measured
+        lastArms = measureArms(mask, width, height, landmarks, jointWidth)
         return out
+    }
+
+    /**
+     * Measures each upper arm's thickness, clothes included: at [ARM_SAMPLES] along shoulder to
+     * elbow, walks across the arm both ways from its centre line to the mask's edge. Garment
+     * sleeves are fitted to this, rather than to an arm width assumed from the shoulder width,
+     * which left the tester's arm - in a loose kameez sleeve, 0.4 shoulder widths thick against
+     * the 0.24 assumed - showing below the sleeve.
+     *
+     * Outer and inner halves are kept apart, so the sleeve follows the arm's real edges even when
+     * the pose model's arm line is not at the arm's middle. A sample where either walk runs into
+     * the torso or off the frame is skipped; with every sample skipped - an arm against the side,
+     * say - the last thickness is kept for [HOLD_FRAMES], then dropped.
+     */
+    private fun measureArms(
+        mask: FloatBuffer, width: Int, height: Int, landmarks: List<NormalizedLandmark>, jointWidth: Float
+    ): FloatArray {
+        val out = FloatArray(2 * ARM_STRIDE) { Float.NaN }
+        val limit = MAX_ARM_HALF * jointWidth
+        val outers = FloatArray(ARM_SAMPLES.size)
+        val inners = FloatArray(ARM_SAMPLES.size)
+        for (side in 0..1) {
+            val shoulder = if (side == 0) LEFT_SHOULDER else RIGHT_SHOULDER
+            val elbow = if (side == 0) LEFT_ELBOW else RIGHT_ELBOW
+            val hip = if (side == 0) LEFT_HIP else RIGHT_HIP
+            var n = 0
+            val o = side * ARM_STRIDE
+            if (landmarks[shoulder].visibility().orElse(1f) >= MIN_VISIBILITY &&
+                landmarks[elbow].visibility().orElse(1f) >= MIN_VISIBILITY) {
+                val jx = landmarks[shoulder].x() * width
+                val jy = landmarks[shoulder].y() * height
+                val ex = landmarks[elbow].x() * width - jx
+                val ey = landmarks[elbow].y() * height - jy
+                val length = hypot(ex, ey)
+                if (length >= 4f) {
+                    // Across the arm, pointing away from the body (from the hip on this side).
+                    var cx = -ey / length
+                    var cy = ex / length
+                    if ((landmarks[hip].x() * width - jx) * cx + (landmarks[hip].y() * height - jy) * cy > 0f) {
+                        cx = -cx
+                        cy = -cy
+                    }
+                    for ((i, f) in ARM_SAMPLES.withIndex()) {
+                        val sx = jx + ex * f
+                        val sy = jy + ey * f
+                        val a = armWalk(mask, width, height, sx, sy, cx, cy, limit)
+                        val b = armWalk(mask, width, height, sx, sy, -cx, -cy, limit)
+                        if (a.isNaN() || b.isNaN()) continue
+                        outers[n] = a
+                        inners[n] = b
+                        n++
+                        val p = o + 2 + i * 4
+                        out[p] = (sx + cx * a) / width
+                        out[p + 1] = (sy + cy * a) / height
+                        out[p + 2] = (sx - cx * b) / width
+                        out[p + 3] = (sy - cy * b) / height
+                    }
+                }
+            }
+            val outer = if (n > 0) median(outers, n) else Float.NaN
+            val inner = if (n > 0) median(inners, n) else Float.NaN
+            if (n > 0) {
+                armStale[side] = 0
+                armOuter[side] = if (armOuter[side].isNaN()) outer else armOuter[side] + SMOOTHING * (outer - armOuter[side])
+                armInner[side] = if (armInner[side].isNaN()) inner else armInner[side] + SMOOTHING * (inner - armInner[side])
+            } else if (++armStale[side] > HOLD_FRAMES) {
+                armOuter[side] = Float.NaN
+                armInner[side] = Float.NaN
+            }
+            out[o] = armOuter[side] / width
+            out[o + 1] = armInner[side] / width
+        }
+        return out
+    }
+
+    private fun median(values: FloatArray, n: Int): Float {
+        java.util.Arrays.sort(values, 0, n)
+        return values[n / 2]
+    }
+
+    /**
+     * Distance from a point on the arm's centre line to the arm's edge along a direction, or NaN:
+     * the point is not on the mask, or the walk reached [limit] - the torso, or a hand against
+     * the arm - or the frame's edge first.
+     */
+    private fun armWalk(
+        mask: FloatBuffer, width: Int, height: Int, x0: Float, y0: Float, dx: Float, dy: Float, limit: Float
+    ): Float {
+        var s = 0f
+        while (s < limit) {
+            val x = (x0 + dx * s).toInt()
+            val y = (y0 + dy * s).toInt()
+            if (x < 0 || y < 0 || x >= width || y >= height) return Float.NaN
+            if (mask.get(y * width + x) < PERSON) return if (s >= 1f) s else Float.NaN
+            s += 1f
+        }
+        return Float.NaN
     }
 
     /**

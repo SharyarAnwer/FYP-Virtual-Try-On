@@ -312,6 +312,7 @@ class MainActivity : AppCompatActivity() {
 
             poseTracked = !landmarks.isNullOrEmpty()
             binding.overlayView.setBodyWidths(widths)
+            binding.overlayView.setArmWidths(if (widths != null) bodyWidth.lastArms else null)
             binding.overlayView.setPose(landmarks, upright.width, upright.height)
         } catch (e: Exception) {
             Log.e(TAG, "Frame analysis failed", e)

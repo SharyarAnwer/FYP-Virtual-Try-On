@@ -121,6 +121,17 @@ class OverlayView @JvmOverloads constructor(
             else -> 1.2f
         }
 
+        /**
+         * How much thicker than the wearer's *measured* arm a sleeve is drawn, by fit style. The
+         * arm is measured in whatever sleeve the wearer has on, so these only add the garment's
+         * own looseness. Judgement, set once for all garments.
+         */
+        fun measuredSleeveAllowance(style: String): Float = when (style) {
+            "slim" -> 1.0f
+            "loose" -> 1.15f
+            else -> 1.05f
+        }
+
         fun fitAllowance(style: String): Float = when (style) {
             "slim" -> 1.03f
             "loose" -> 1.15f
@@ -206,7 +217,9 @@ class OverlayView @JvmOverloads constructor(
         val leftSleeve: SleeveFrame?,
         val rightSleeve: SleeveFrame?,
         /** See [sleeveAllowance]. */
-        val sleeveAllowance: Float
+        val sleeveAllowance: Float,
+        /** See [measuredSleeveAllowance]. */
+        val measuredSleeveAllowance: Float
     ) {
         /** Torso, left sleeve, right sleeve — the order of [GarmentMesh.weights]. */
         val bones = Array(GarmentMesh.BONES) { Matrix() }
@@ -250,7 +263,8 @@ class OverlayView @JvmOverloads constructor(
                         garment.anchor("left_elbow")),
                     rightSleeve = SleeveFrame.of(garment.armholes["right"], garment.anchor("right_shoulder"),
                         garment.anchor("right_elbow")),
-                    sleeveAllowance = sleeveAllowance(garment.fitStyle)
+                    sleeveAllowance = sleeveAllowance(garment.fitStyle),
+                    measuredSleeveAllowance = measuredSleeveAllowance(garment.fitStyle)
                 )
             }
         }
@@ -423,6 +437,14 @@ class OverlayView @JvmOverloads constructor(
         bodyWidths = snapshot
     }
 
+    /** Latest arm-thickness snapshot from [BodyWidthMeter.lastArms], or null. */
+    @Volatile private var armWidths: FloatArray? = null
+
+    /** Publishes an arm-thickness snapshot; the next [setPose] triggers the redraw. */
+    fun setArmWidths(snapshot: FloatArray?) {
+        armWidths = snapshot
+    }
+
     /**
      * Sets the garment to render, or clears it when either argument is null. [layers] must be in
      * the same order as [Garment.parts].
@@ -497,6 +519,7 @@ class OverlayView @JvmOverloads constructor(
             drawSkeleton(canvas, snapshot, dimmed = wearingGarment)
             if (faceSeen) canvas.drawPath(facePath, bonePaint)
             bodyWidths?.let { drawBodyWidths(canvas, it) }
+            armWidths?.let { drawArmWidths(canvas, it) }
         }
     }
 
@@ -922,7 +945,17 @@ class OverlayView @JvmOverloads constructor(
         }
         val joints = hypot(viewX(p, RIGHT_SHOULDER) - viewX(p, LEFT_SHOULDER),
             viewY(p, RIGHT_SHOULDER) - viewY(p, LEFT_SHOULDER))
+        // The sleeve spans the arm's measured edges, or an arm width assumed from the shoulders
+        // when the arm has not been measured.
+        val armSx = imageWidth * mapping[0]
+        val arms = armWidths
+        val ao = side * BodyWidthMeter.ARM_STRIDE
+        val armOuter = if (arms != null && ao + 1 < arms.size) arms[ao] * armSx else Float.NaN
+        val armInner = if (arms != null && ao + 1 < arms.size) arms[ao + 1] * armSx else Float.NaN
+        val measured = !armOuter.isNaN() && !armInner.isNaN()
         val half = 0.5f * ARM_WIDTH_PER_JOINT * joints * m.sleeveAllowance
+        val outerHalf = if (measured) armOuter * m.measuredSleeveAllowance else half
+        val innerHalf = if (measured) armInner * m.measuredSleeveAllowance else half
         val along = frame.cuffAlong * length / frame.length
         val mx = jx + bx * along
         val my = jy + by * along
@@ -930,16 +963,31 @@ class OverlayView @JvmOverloads constructor(
         val c = m.cornerTargets
         val b = side * 8
         c[b] = s[0]; c[b + 1] = s[1]
-        c[b + 2] = mx + cx * half; c[b + 3] = my + cy * half
-        c[b + 4] = mx - cx * half; c[b + 5] = my - cy * half
+        c[b + 2] = mx + cx * outerHalf; c[b + 3] = my + cy * outerHalf
+        c[b + 4] = mx - cx * innerHalf; c[b + 5] = my - cy * innerHalf
         // The armpit rises straight up the torso's side, towards the tuck point only along the
         // body's own up-down line. Moving it the whole way to the tuck point - up and inwards,
         // under the shoulder joint - pulled the shirt's side in with it, and on device the shirt
         // pinched in below each raised arm and showed the wearer's own clothes there.
+        //
+        // With the arm measured, it rises to where the sleeve's underside - the arm's inner edge,
+        // running along the arm - meets the torso's side, so the sleeve's bottom edge follows the
+        // arm into the armpit. Rising a fixed distance instead left the arm's underside uncovered
+        // near the armpit at 45 degrees, and at 90 tucked the root below the arm so the sleeve
+        // narrowed from root to cuff and looked bent into the shirt.
         val downLength = hypot(downX, downY)
         val ux = downX / downLength
         val uy = downY / downLength
-        val climb = (jx - cx * ARMPIT_TUCK * joints - a0x) * ux + (jy - cy * ARMPIT_TUCK * joints - a0y) * uy
+        var climb = (jx - cx * ARMPIT_TUCK * joints - a0x) * ux + (jy - cy * ARMPIT_TUCK * joints - a0y) * uy
+        if (measured) {
+            // Solve J - c * innerHalf + b * s = A0 + u * k for k, the distance along the torso's side.
+            val rx = a0x - (jx - cx * innerHalf)
+            val ry = a0y - (jy - cy * innerHalf)
+            val det = -bx * uy + ux * by
+            climb = if (abs(det) < 1e-3f) 0f else ((bx * ry - by * rx) / det).coerceAtMost(0f)
+            // Never above the shoulder joint's height.
+            climb = climb.coerceAtLeast((jx - a0x) * ux + (jy - a0y) * uy)
+        }
         c[b + 6] = a0x + t * climb * ux
         c[b + 7] = a0y + t * climb * uy
 
@@ -1096,6 +1144,19 @@ class OverlayView @JvmOverloads constructor(
      * coloured by how each half was obtained. A debug view of [BodyWidthMeter], not part of the
      * try-on itself.
      */
+    private fun drawArmWidths(canvas: Canvas, a: FloatArray) {
+        val sx = imageWidth * mapping[0]
+        val sy = imageHeight * mapping[0]
+        for (side in 0..1) {
+            for (i in BodyWidthMeter.ARM_SAMPLES.indices) {
+                val p = side * BodyWidthMeter.ARM_STRIDE + 2 + i * 4
+                if (p + 3 >= a.size || a[p].isNaN()) continue
+                canvas.drawLine(a[p] * sx + mapping[1], a[p + 1] * sy + mapping[2],
+                    a[p + 2] * sx + mapping[1], a[p + 3] * sy + mapping[2], measuredPaint)
+            }
+        }
+    }
+
     private fun drawBodyWidths(canvas: Canvas, w: FloatArray) {
         val sx = imageWidth * mapping[0]
         val sy = imageHeight * mapping[0]

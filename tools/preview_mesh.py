@@ -59,6 +59,12 @@ MIN_EASE, MAX_EASE = -0.6, 1.0
 ARM_WIDTH_PER_JOINT = 0.24
 SLEEVE_ALLOWANCE = {"slim": 1.1, "regular": 1.2, "loose": 1.4}
 
+# The app measures the wearer's arm thickness live (BodyWidthMeter.measureArms) and fits raised
+# sleeves to it times MEASURED_SLEEVE_ALLOWANCE (OverlayView). The preview has no wearer, so it
+# stands in an arm this many shoulder widths thick - the tester's arm in a loose kameez sleeve.
+ARM_STANDIN_PER_JOINT = 0.41
+MEASURED_SLEEVE_ALLOWANCE = {"slim": 1.0, "regular": 1.05, "loose": 1.15}
+
 # Four-corner sleeve fit (OverlayView.fitSleeve, GarmentMesh sleeve corners). Change together.
 ARMPIT_TUCK = 0.18       # armpit target below the arm's line when raised, x shoulder-joint width
 RISE_DEG = 30.0          # fully fitted this many degrees past the photo's own sleeve angle
@@ -313,13 +319,18 @@ def fit_sleeve(entry, texture, side, view, torso, handedness):
     origin = root + ((a[f"{side}_shoulder"] - root) @ axis) * axis
     along = (cuff - origin) @ axis * length_b / ((a[f"{side}_elbow"] - origin) @ axis)
     joints_b = np.linalg.norm(vb["right_shoulder"] - vb["left_shoulder"])
-    half = 0.5 * ARM_WIDTH_PER_JOINT * joints_b * SLEEVE_ALLOWANCE.get(entry.get("fitStyle"), 1.2)
+    # The sleeve spans the arm's (stand-in) measured edges.
+    half = 0.5 * ARM_STANDIN_PER_JOINT * joints_b * MEASURED_SLEEVE_ALLOWANCE.get(entry.get("fitStyle"), 1.05)
     C = J + b * along
     O_t, I_t = C + c * half, C - c * half
-    # Straight up the torso's side, not across it: towards the tuck point only along the body's
-    # own up-down line, so the shirt keeps its fitted width under the arm.
+    # The armpit rises straight up the torso's side to where the sleeve's underside - the arm's
+    # inner edge, running along the arm - meets it (OverlayView.fitSleeve).
     down = down_b / np.linalg.norm(down_b)
-    A_t = A0 + t * ((J - c * ARMPIT_TUCK * joints_b - A0) @ down) * down
+    r = A0 - (J - c * half)
+    det = -b[0] * down[1] + down[0] * b[1]
+    climb = 0.0 if abs(det) < 1e-3 else min(0.0, (b[0] * r[1] - b[1] * r[0]) / det)
+    climb = max(climb, (J - A0) @ down)
+    A_t = A0 + t * climb * down
 
     # A twisted target - an arm folded across the body, say - would fold the sleeve over itself.
     cross = lambda p, q: p[0] * q[1] - p[1] * q[0]
