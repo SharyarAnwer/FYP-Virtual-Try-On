@@ -1,0 +1,601 @@
+"""
+Offline check of the mesh warp that draws real garments (M3.6).
+
+    python tools/preview_mesh.py [--id polo_pink]
+
+Bends each real garment's photo through a set of arm poses using the same maths as
+OverlayView.kt - grid, weights, per-bone transforms, blend, two-pass draw - and writes
+tools/mesh_preview_<id>.png. Like preview_garments.py for the layered placeholders, it exists so
+a warp problem shows up here rather than on a phone. The two implementations must change
+together.
+
+How the warp works
+------------------
+A regular grid is laid over the photo. Every grid vertex gets a weight per bone - torso, left
+sleeve, right sleeve - from which side of the armhole it lies on: the line from shoulder tip to
+armpit, continued below the armpit through the gap between the hanging cuff and the body side.
+Weights blend smoothly across a band either side of that line, so the sleeve bends away from the
+body without a hard join. Each frame, every vertex moves to the weighted blend of where each bone's
+transform would put it (linear blend skinning), and the photo is drawn bent over the grid.
+
+It is then drawn twice: the whole garment, then only its sleeves again on top. A single bent
+mesh draws its triangles in grid order, so where a warped sleeve overlaps the body the body
+could land on top; the second pass guarantees sleeves are in front.
+"""
+
+import argparse
+import json
+import math
+import os
+
+import numpy as np
+from PIL import Image, ImageDraw
+
+from preview_garments import affine_from_points, segment_matrix, checkerboard
+
+REAL = os.path.join("app", "src", "main", "assets", "garments", "real")
+
+# Grid cell size in artwork px, and blend half-width as a fraction of shoulder-joint width.
+# Both mirrored in OverlayView.kt.
+MESH_CELL = 16
+# Most grid vertices allowed; larger photos get larger cells (GarmentMesh.MAX_VERTICES, which
+# explains the GPU driver crash this avoids).
+MAX_VERTICES = 3600
+BLEND = 0.06
+# The app fits the garment's body to the wearer's torso width, measured live (BodyWidthMeter +
+# OverlayView.fitToBody), in one of three modes (OverlayView.FitMode: chest, rows, off). The
+# preview has no wearer, so it stands in a torso this many times the shoulder-joint width at every
+# height - about what the tester measured with arms down, in a loose top. Being the same at every
+# height, the stand-in gives the same result in "chest" and "rows" modes.
+BODY_WIDTH_PER_JOINT = 1.25
+# OverlayView.fitAllowance and its limits.
+FIT_ALLOWANCE = {"slim": 1.03, "regular": 1.08, "loose": 1.15}
+MIN_EASE, MAX_EASE = -0.6, 1.0
+
+# Sleeves are centred on the arm and drawn this many arm-widths wide, by fit style. The arm is
+# taken as 0.24 shoulder-joint widths (BodyWidthMeter.ARM_HALF_WIDTH x 2, from the tester's M3.5
+# shots). "regular" is the pink polo's: its photo shows the sleeve as worn, 0.29 joint widths at
+# the cuff, which is 1.2 arm widths. "slim" and "loose" are judgement, not measured.
+ARM_WIDTH_PER_JOINT = 0.24
+SLEEVE_ALLOWANCE = {"slim": 1.1, "regular": 1.2, "loose": 1.4}
+
+# The app measures the wearer's arm thickness live (BodyWidthMeter.measureArms) and fits raised
+# sleeves to it times MEASURED_SLEEVE_ALLOWANCE (OverlayView). The preview has no wearer, so it
+# stands in an arm this many shoulder widths thick - the tester's arm in a loose kameez sleeve.
+ARM_STANDIN_PER_JOINT = 0.41
+MEASURED_SLEEVE_ALLOWANCE = {"slim": 1.0, "regular": 1.05, "loose": 1.15}
+
+# Four-corner sleeve fit (OverlayView.fitSleeve, GarmentMesh sleeve corners). Change together.
+ARMPIT_TUCK = 0.18       # armpit target below the arm's line when raised, x shoulder-joint width
+RISE_DEG = 30.0          # fully fitted this many degrees past the photo's own sleeve angle
+LIFT_RADIUS = 0.6        # torso near the armpit lifts with it, fading over this x garment joint width
+U_MIN, U_MAX, V_MIN, V_MAX = -0.1, 1.05, -0.1, 1.0   # reach of the stretch past the corners
+# Points on the body side of the armhole boundary follow the torso rather than the sleeve's
+# corners: half and half on the boundary, fully so this many blend half-widths in
+# (GarmentMesh.BODY_SIDE). Wider let the side seam's blend points stray towards the sleeve.
+BODY_SIDE = 0.3
+HEM_DROP = 0.1       # GarmentMesh.HEM_DROP
+
+# Test body, built from the proportions measured on device (see garment_points.py).
+SHOULDER_WIDTH = 330
+HIP_DROP = 1.45
+UPPER_ARM = 0.83
+CANVAS = (1080, 1180)
+SHOULDER_Y = 250
+
+POSES = [("arms at rest", 8, 8), ("arms 45°", 45, 45), ("arms horizontal", 90, 90),
+         ("left 20°, right 70°", 20, 70)]
+
+
+# --- weights -------------------------------------------------------------------------------
+
+def side_boundary(entry, side):
+    """
+    One side's sleeve/torso boundary as pieces (origin, direction, length or None, flow).
+
+    The boundary runs shoulder tip -> armpit -> the 'below' point, extended as rays past both
+    ends. `flow` is the piece's top-to-bottom direction, which is what the outward normal is
+    computed from. The upward ray points *up*, so taking its normal from its own direction gave
+    it the wrong side: the neck counted as sleeve on both sides at once.
+    """
+    arm = entry["armholes"][side]
+    p = lambda k: np.array([arm[k]["x"], arm[k]["y"]], float)
+    s, a, b = p("shoulder"), p("armpit"), p("below")
+    seg = (a - s) / np.linalg.norm(a - s)
+    low = (b - a) / np.linalg.norm(b - a)
+    return [(s, -seg, None, seg), (s, seg, float(np.linalg.norm(a - s)), seg), (a, low, None, low)]
+
+
+def signed_distance(points, pieces, outward):
+    """Signed distance of each point to the boundary, positive on the sleeve side."""
+    best = np.full(len(points), np.inf)
+    signed = np.zeros(len(points))
+    for origin, direction, length, flow in pieces:
+        rel = points - origin
+        t = np.clip(rel @ direction, 0.0, length if length is not None else np.inf)
+        closest = origin + t[:, None] * direction
+        dist = np.linalg.norm(points - closest, axis=1)
+        normal = outward * np.array([flow[1], -flow[0]])
+        take = dist < best
+        best = np.where(take, dist, best)
+        signed = np.where(take, np.sign(rel @ normal) * dist, signed)
+    return signed
+
+
+def smoothstep(edge0, edge1, x):
+    t = np.clip((x - edge0) / (edge1 - edge0), 0.0, 1.0)
+    return t * t * (3 - 2 * t)
+
+
+def joint_width(entry):
+    a = entry["anchors"]
+    return a["right_shoulder"]["x"] - a["left_shoulder"]["x"]
+
+
+def vertex_weights(entry, points):
+    """(n, 3) weights for torso, left sleeve, right sleeve."""
+    band = BLEND * joint_width(entry)
+    w_left = smoothstep(-band, band, signed_distance(points, side_boundary(entry, "left"), -1))
+    w_right = smoothstep(-band, band, signed_distance(points, side_boundary(entry, "right"), 1))
+    w_torso = np.clip(1.0 - w_left - w_right, 0.0, 1.0)
+    # Normalise: a vertex's position is a weighted *average* of where each bone puts it, and
+    # weights summing past 1 throw the vertex beyond all of them.
+    weights = np.stack([w_torso, w_left, w_right], axis=1)
+    return weights / weights.sum(axis=1, keepdims=True)
+
+
+def grid(w, h):
+    cell = MESH_CELL
+    while (max(1, round(w / cell)) + 1) * (max(1, round(h / cell)) + 1) > MAX_VERTICES:
+        cell += 1
+    cols = max(1, round(w / cell))
+    rows = max(1, round(h / cell))
+    xs = np.linspace(0, w, cols + 1)
+    ys = np.linspace(0, h, rows + 1)
+    gx, gy = np.meshgrid(xs, ys)
+    return cols, rows, np.stack([gx.ravel(), gy.ravel()], axis=1)
+
+
+# --- pose ----------------------------------------------------------------------------------
+
+def body(left_deg, right_deg):
+    cx = CANVAS[0] / 2
+    half = SHOULDER_WIDTH / 2
+    pts = {"left_shoulder": (cx - half, SHOULDER_Y), "right_shoulder": (cx + half, SHOULDER_Y)}
+    hip_y = SHOULDER_Y + HIP_DROP * SHOULDER_WIDTH
+    pts["left_hip"] = (cx - half * 0.55, hip_y)
+    pts["right_hip"] = (cx + half * 0.55, hip_y)
+    for side, sign, deg in (("left", -1, left_deg), ("right", 1, right_deg)):
+        r = math.radians(deg)
+        sx, sy = pts[f"{side}_shoulder"]
+        length = UPPER_ARM * SHOULDER_WIDTH
+        pts[f"{side}_elbow"] = (sx + sign * length * math.sin(r), sy + length * math.cos(r))
+    return pts
+
+
+def sleeve_matrix(entry, side, view, handedness):
+    """
+    Places one sleeve on the arm: its own centre line - armhole midpoint to cuff midpoint - along
+    the arm's line, shoulder joint to elbow, and its width across that line squeezed or stretched
+    to the arm's width times the sleeve allowance.
+
+    Rotating the whole sleeve about the shoulder joint, by the joint-to-cuff line, swung a wide
+    flat sleeve's underarm half across the chest when the arm hung down: on the white waffle shirt
+    over half its grid points landed more than 20 px inside the arm, some nearly 300 px. A flat
+    sleeve shows half its circumference; worn, that fabric wraps round the arm.
+
+    Mirrors OverlayView.sleeveMatrix. Change the two together.
+    """
+    a, h = entry["anchors"], entry["armholes"][side]
+    p = lambda d: np.array([d["x"], d["y"]], float)
+    if "cuffOuter" not in h:
+        return None
+    joint, elbow = p(a[f"{side}_shoulder"]), p(a[f"{side}_elbow"])
+    root = (p(h["shoulder"]) + p(h["armpit"])) / 2
+    cuff_outer, cuff_inner = p(h["cuffOuter"]), p(h["cuffInner"])
+    u_g = (cuff_outer + cuff_inner) / 2 - root
+    u_g /= np.linalg.norm(u_g)
+    v_g = np.array([-u_g[1], u_g[0]])
+    origin = root + ((joint - root) @ u_g) * u_g       # the joint, moved onto the centre line
+    length_g = (elbow - origin) @ u_g
+    width_g = abs((cuff_outer - cuff_inner) @ v_g)
+
+    s, e = np.array(view[f"{side}_shoulder"], float), np.array(view[f"{side}_elbow"], float)
+    length_b = np.linalg.norm(e - s)
+    if length_g < 1 or width_g < 1 or length_b < 1:
+        return None
+    u_b = (e - s) / length_b
+    v_b = handedness * np.array([-u_b[1], u_b[0]])
+    joints_b = np.linalg.norm(np.array(view["right_shoulder"]) - np.array(view["left_shoulder"]))
+    target = ARM_WIDTH_PER_JOINT * joints_b * SLEEVE_ALLOWANCE.get(entry.get("fitStyle"), 1.2)
+
+    linear = (length_b / length_g) * np.outer(u_b, u_g) + (target / width_g) * np.outer(v_b, v_g)
+    shift = s - linear @ origin
+    return ((linear[0, 0], linear[0, 1], shift[0]), (linear[1, 0], linear[1, 1], shift[1]))
+
+
+def sleeve_corners(entry, side):
+    """The sleeve's corners in the photo: shoulder tip S, cuff outer O, cuff inner I, armpit A."""
+    h = entry["armholes"][side]
+    p = lambda d: np.array([d["x"], d["y"]], float)
+    if "cuffOuter" not in h:
+        return None
+    return p(h["shoulder"]), p(h["cuffOuter"]), p(h["cuffInner"]), p(h["armpit"])
+
+
+def bilinear(u, v, S, O, I, A):
+    u = u[:, None]
+    v = v[:, None]
+    return (1 - u) * (1 - v) * S + u * (1 - v) * O + u * v * I + (1 - u) * v * A
+
+
+def inverse_bilinear(p, S, O, I, A):
+    """
+    Each point's place between the four corners: (u, v) with p = bilinear(u, v, S, O, I, A), u
+    running shoulder to cuff and v across, from the sleeve's top edge to its underside. Points
+    outside the quad get values outside 0..1, which are then clamped (GarmentMesh.sleeveU/V).
+    """
+    cross = lambda a, b: a[..., 0] * b[..., 1] - a[..., 1] * b[..., 0]
+    e, f, g = O - S, A - S, S - O + I - A
+    h = p - S
+    k2 = cross(g, f)
+    k1 = cross(e, f) + cross(h, np.broadcast_to(g, h.shape))
+    k0 = cross(h, np.broadcast_to(e, h.shape))
+    if abs(k2) < 1e-6:
+        roots = [-k0 / k1]
+    else:
+        disc = np.sqrt(np.maximum(k1 * k1 - 4 * k0 * k2, 0))
+        roots = [(-k1 - disc) / (2 * k2), (-k1 + disc) / (2 * k2)]
+    best = None
+    for v in roots:
+        den = e[None, :] + v[:, None] * g[None, :]
+        use_x = np.abs(den[:, 0]) > np.abs(den[:, 1])
+        u = np.where(use_x, (h[:, 0] - f[0] * v) / np.where(use_x, den[:, 0], 1),
+                     (h[:, 1] - f[1] * v) / np.where(use_x, 1, den[:, 1]))
+        err = (np.linalg.norm(bilinear(u, v, S, O, I, A) - p, axis=1)
+               + 50 * (np.maximum(0, -u) + np.maximum(0, u - 1) + np.maximum(0, -v) + np.maximum(0, v - 1)))
+        if best is None:
+            best = [u, v, err]
+        else:
+            take = err < best[2]
+            best = [np.where(take, u, best[0]), np.where(take, v, best[1]), np.where(take, err, best[2])]
+    return best[0], best[1]
+
+
+def sleeve_uv(entry, side, points):
+    """
+    Clamped (u, v) for the four-corner stretch, and how far each point lies on the body side of
+    the armhole boundary: 0.5 on it, 1 at BODY_SIDE blend half-widths in, 0 as far out
+    (GarmentMesh.sleeveU/V/bodySide).
+    """
+    u, v = inverse_bilinear(points, *sleeve_corners(entry, side))
+    band = BODY_SIDE * BLEND * joint_width(entry)
+    depth = -signed_distance(points, side_boundary(entry, side), -1 if side == "left" else 1)
+    return np.clip(u, U_MIN, U_MAX), np.clip(v, V_MIN, V_MAX), smoothstep(-band, band, depth)
+
+
+def degrees_between(a, b):
+    c = float(a @ b) / (np.linalg.norm(a) * np.linalg.norm(b))
+    return math.degrees(math.acos(max(-1.0, min(1.0, c))))
+
+
+def fit_sleeve(entry, texture, side, view, torso, handedness):
+    """
+    The four-corner fit for one sleeve (OverlayView.fitSleeve): how far it applies, t in 0..1,
+    the corners' targets on the body, and how far the armpit moved. None when it does not apply.
+
+    The shoulder tip stays on the torso, so the seam cannot open; the cuff's two ends sit across
+    the arm at its width times the sleeve allowance; the armpit slides from where the torso puts it
+    up to just under the arm as the arm rises. Turning the photo's hanging sleeve as a whole about
+    the shoulder left it as tall as it hangs - a box above the arm - with its underside flapping
+    below. t rises from 0 at the sleeve's own angle in the photo, so a resting arm is unchanged.
+    """
+    corners = sleeve_corners(entry, side)
+    if corners is None:
+        return None
+    S, O, I, A = corners
+    a = {k: np.array([v["x"], v["y"]], float) for k, v in entry["anchors"].items()}
+    vb = {k: np.array(v, float) for k, v in view.items()}
+    J, E = vb[f"{side}_shoulder"], vb[f"{side}_elbow"]
+    length_b = np.linalg.norm(E - J)
+    if length_b < 1:
+        return None
+    b = (E - J) / length_b
+    down_g = (a["left_hip"] + a["right_hip"] - a["left_shoulder"] - a["right_shoulder"]) / 2
+    down_b = (vb["left_hip"] + vb["right_hip"] - vb["left_shoulder"] - vb["right_shoulder"]) / 2
+    root = (S + A) / 2
+    cuff = (O + I) / 2
+    axis = (cuff - root) / np.linalg.norm(cuff - root)
+    t = float(smoothstep(0.0, 1.0, np.clip((degrees_between(b, down_b) - degrees_between(axis, down_g))
+                                           / RISE_DEG, 0.0, 1.0)))
+    if t <= 0:
+        return None
+
+    at = lambda q: apply_all(torso, widen(entry, q[None], fitted_ease(entry, texture, q[None])))[0]
+    S_t, A0 = at(S), at(A)
+    c = np.array([-b[1], b[0]])
+    if (A0 - J) @ c > 0:
+        c = -c                                                  # away from the armpit
+    origin = root + ((a[f"{side}_shoulder"] - root) @ axis) * axis
+    along = (cuff - origin) @ axis * length_b / ((a[f"{side}_elbow"] - origin) @ axis)
+    joints_b = np.linalg.norm(vb["right_shoulder"] - vb["left_shoulder"])
+    # The sleeve spans the arm's (stand-in) measured edges.
+    half = 0.5 * ARM_STANDIN_PER_JOINT * joints_b * MEASURED_SLEEVE_ALLOWANCE.get(entry.get("fitStyle"), 1.05)
+    C = J + b * along
+    O_t, I_t = C + c * half, C - c * half
+    # The armpit rises straight up the torso's side to where the sleeve's underside - the arm's
+    # inner edge, running along the arm - meets it (OverlayView.fitSleeve).
+    down = down_b / np.linalg.norm(down_b)
+    r = A0 - (J - c * half)
+    det = -b[0] * down[1] + down[0] * b[1]
+    climb = 0.0 if abs(det) < 1e-3 else min(0.0, (b[0] * r[1] - b[1] * r[0]) / det)
+    climb = max(climb, (J - A0) @ down)
+    A_t = A0 + t * climb * down
+
+    # A twisted target - an arm folded across the body, say - would fold the sleeve over itself.
+    cross = lambda p, q: p[0] * q[1] - p[1] * q[0]
+    winding = lambda P: [cross(P[1] - P[0], P[3] - P[0]), cross(P[2] - P[1], P[0] - P[1]),
+                         cross(P[3] - P[2], P[1] - P[2]), cross(P[0] - P[3], P[2] - P[3])]
+    want = np.sign(winding((S, O, I, A))[0]) * handedness
+    if any(np.sign(x) != want for x in winding((S_t, O_t, I_t, A_t))):
+        return None
+    return t, (S_t, O_t, I_t, A_t), A_t - A0
+
+
+def place(entry, texture, src, weights, view):
+    """Every grid point's position on the body: the bone blend, with each sleeve fitted by its corners."""
+    widened = widen(entry, src, fitted_ease(entry, texture, src))
+    mats = bone_matrices(entry, view)
+    (ta, tb, _), (td, te, _) = mats[0]
+    handedness = 1.0 if ta * te - tb * td >= 0 else -1.0
+    placed = [apply_all(m, widened) for m in mats]
+    fits = {}
+    # The torso first, lifted with both armpits; then each sleeve, whose points outside the sleeve
+    # on the body side follow that lifted torso. Sent to the sleeve's underside instead, the side
+    # seam's blend points just below the armpit were dragged up under the arm and stuck out of
+    # the shirt's side as a ragged flap.
+    for k, side in ((1, "left"), (2, "right")):
+        fit = fit_sleeve(entry, texture, side, view, mats[0], handedness)
+        if fit is None:
+            continue
+        fits[k] = (side, fit)
+        A = sleeve_corners(entry, side)[3]
+        lift = smoothstep(LIFT_RADIUS * joint_width(entry), 0.0, np.linalg.norm(src - A, axis=1))
+        placed[0] = placed[0] + lift[:, None] * fit[2][None, :]
+    for k, (side, (t, targets, moved)) in fits.items():
+        u, v, outside = sleeve_uv(entry, side, src)
+        target = (1 - outside[:, None]) * bilinear(u, v, *targets) + outside[:, None] * placed[0]
+        placed[k] = (1 - t) * placed[k] + t * target
+    return sum(weights[:, k:k + 1] * placed[k] for k in range(3))
+
+
+def bone_matrices(entry, view):
+    a = {k: (v["x"], v["y"]) for k, v in entry["anchors"].items()}
+    mid = lambda p: ((p["left_hip"][0] + p["right_hip"][0]) / 2, (p["left_hip"][1] + p["right_hip"][1]) / 2)
+    torso = affine_from_points([a["left_shoulder"], a["right_shoulder"], mid(a)],
+                               [view["left_shoulder"], view["right_shoulder"], mid(view)])
+    (ta, tb, _), (td, te, _) = torso
+    handedness = 1.0 if ta * te - tb * td >= 0 else -1.0
+    sleeves = []
+    for side in ("left", "right"):
+        m = sleeve_matrix(entry, side, view, handedness)
+        if m is None:
+            m = segment_matrix(a[f"{side}_shoulder"], a[f"{side}_elbow"],
+                               view[f"{side}_shoulder"], view[f"{side}_elbow"], torso, handedness)
+        sleeves.append(m if m is not None else torso)
+    return [torso] + sleeves
+
+
+def apply_all(matrix, pts):
+    (a, b, c), (d, e, f) = matrix
+    return np.stack([a * pts[:, 0] + b * pts[:, 1] + c, d * pts[:, 0] + e * pts[:, 1] + f], axis=1)
+
+
+EASE_ABOVE = 0.1     # GarmentMesh.EASE_ABOVE, x shoulder-to-hip length above the armpit
+EASE_FADE = 3.5      # GarmentMesh.EASE_FADE, in blend half-widths
+
+
+def ease_ramp(entry, ys):
+    """0 down to EASE_ABOVE above the armpit, 1 from the armpit down (GarmentMesh.easeRamp)."""
+    a, holes = entry["anchors"], entry["armholes"]
+    shoulder_y = (a["left_shoulder"]["y"] + a["right_shoulder"]["y"]) / 2
+    hip_y = (a["left_hip"]["y"] + a["right_hip"]["y"]) / 2
+    armpit_y = (holes["left"]["armpit"]["y"] + holes["right"]["armpit"]["y"]) / 2
+    return smoothstep(armpit_y - EASE_ABOVE * (hip_y - shoulder_y), armpit_y, ys)
+
+
+def ease_weights(entry, points):
+    """1 over the torso and up to the armhole, fading to 0 inside each sleeve (GarmentMesh.easeWeights)."""
+    fade = EASE_FADE * BLEND * joint_width(entry)
+    fl = smoothstep(0.0, fade, signed_distance(points, side_boundary(entry, "left"), -1))
+    fr = smoothstep(0.0, fade, signed_distance(points, side_boundary(entry, "right"), 1))
+    return 1 - np.maximum(fl, fr)
+
+
+def torso_width(entry, texture, ys):
+    """Garment body width at each height in `ys`, between its outermost body pixels (GarmentMesh.measureTorso)."""
+    alpha = np.asarray(texture.getchannel("A"))
+    h, w = alpha.shape
+    left, right = side_boundary(entry, "left"), side_boundary(entry, "right")
+    out = np.zeros(len(ys))
+    for i, y in enumerate(ys):
+        row = min(h - 1, int(y))
+        pts = np.stack([np.arange(w) + 0.5, np.full(w, row + 0.5)], axis=1)
+        body = ((alpha[row] >= 128) & (signed_distance(pts, left, -1) < 0)
+                & (signed_distance(pts, right, 1) < 0))
+        xs = np.nonzero(body)[0]
+        width = xs.max() - xs.min() + 1 if len(xs) else 0
+        # A sharp narrowing going down is the hem, not the cut: keep the row above's width.
+        above = out[i - 1] if i > 0 else 0
+        out[i] = above if width < (1 - HEM_DROP) * above else width
+    return out
+
+
+def fitted_ease(entry, texture, points):
+    """Per point, the widening that fits its row to the stand-in wearer (OverlayView.fitToBody)."""
+    w, h = texture.size
+    _, rows, _ = grid(w, h)
+    row_ys = np.array([min(h - 1, r * h // rows) for r in range(rows + 1)], float)
+    garment = torso_width(entry, texture, row_ys)
+    target = BODY_WIDTH_PER_JOINT * FIT_ALLOWANCE.get(entry.get("fitStyle"), 1.08) * joint_width(entry)
+    ease = np.where(garment >= 1, np.clip(target / np.maximum(garment, 1) - 1, MIN_EASE, MAX_EASE), 0)
+    return np.interp(points[:, 1], row_ys, ease)
+
+
+def widen(entry, points, amount):
+    """
+    The torso below the armpits pushed away from the centre line (GarmentMesh.widen).
+    `amount` is one widening fraction, or one per point.
+    """
+    a = entry["anchors"]
+    centre_x = (a["left_shoulder"]["x"] + a["right_shoulder"]["x"]) / 2
+    e = amount * ease_ramp(entry, points[:, 1])
+    out = points.copy()
+    out[:, 0] = points[:, 0] + ease_weights(entry, points) * (points[:, 0] - centre_x) * e
+    return out
+
+
+def skin(points, weights, matrices):
+    out = np.zeros_like(points)
+    for k, m in enumerate(matrices):
+        out += weights[:, k:k + 1] * apply_all(m, points)
+    return out
+
+
+# --- rasteriser (stands in for Canvas.drawBitmapMesh) --------------------------------------
+
+def draw_mesh(target, texture, cols, rows, src, dst):
+    """Draw `texture` bent over the grid, triangle by triangle in grid order, like drawBitmapMesh."""
+    tex = np.asarray(texture, np.float32) / 255.0
+    th, tw = tex.shape[:2]
+    out = np.asarray(target, np.float32).copy() / 255.0
+    H, W = out.shape[:2]
+    stride = cols + 1
+    for r in range(rows):
+        for c in range(cols):
+            i00 = r * stride + c
+            for tri in ((i00, i00 + 1, i00 + stride), (i00 + 1, i00 + stride + 1, i00 + stride)):
+                d = dst[list(tri)]
+                s = src[list(tri)]
+                x0, y0 = np.floor(d.min(axis=0)).astype(int)
+                x1, y1 = np.ceil(d.max(axis=0)).astype(int)
+                x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, W - 1), min(y1, H - 1)
+                if x1 < x0 or y1 < y0:
+                    continue
+                gx, gy = np.meshgrid(np.arange(x0, x1 + 1) + 0.5, np.arange(y0, y1 + 1) + 0.5)
+                (ax, ay), (bx, by), (cx, cy) = d
+                det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy)
+                if abs(det) < 1e-9:
+                    continue
+                l1 = ((by - cy) * (gx - cx) + (cx - bx) * (gy - cy)) / det
+                l2 = ((cy - ay) * (gx - cx) + (ax - cx) * (gy - cy)) / det
+                l3 = 1 - l1 - l2
+                inside = (l1 >= -1e-6) & (l2 >= -1e-6) & (l3 >= -1e-6)
+                if not inside.any():
+                    continue
+                u = l1 * s[0, 0] + l2 * s[1, 0] + l3 * s[2, 0]
+                v = l1 * s[0, 1] + l2 * s[1, 1] + l3 * s[2, 1]
+                ui = np.clip(u.astype(int), 0, tw - 1)
+                vi = np.clip(v.astype(int), 0, th - 1)
+                px = tex[vi, ui]
+                region = out[y0:y1 + 1, x0:x1 + 1]
+                a = (px[..., 3:4] * inside[..., None])
+                region[..., :3] = px[..., :3] * a + region[..., :3] * (1 - a)
+    return Image.fromarray((np.clip(out, 0, 1) * 255).astype(np.uint8))
+
+
+def sleeve_only(texture, entry):
+    """The photo with every pixel on the torso side cleared: the second pass draws only sleeves."""
+    w, h = texture.size
+    ys, xs = np.mgrid[0:h, 0:w]
+    pts = np.stack([xs.ravel() + 0.5, ys.ravel() + 0.5], axis=1)
+    keep = np.zeros(len(pts), bool)
+    for side, outward in (("left", -1), ("right", 1)):
+        keep |= signed_distance(pts, side_boundary(entry, side), outward) >= 0
+    rgba = np.asarray(texture).copy()
+    rgba[..., 3] = np.where(keep.reshape(h, w), rgba[..., 3], 0)
+    return Image.fromarray(rgba, "RGBA")
+
+
+def render(entry, texture, sleeves, left_deg, right_deg):
+    w, h = texture.size
+    cols, rows, src = grid(w, h)
+    weights = vertex_weights(entry, src)
+    view = body(left_deg, right_deg)
+    dst = place(entry, texture, src, weights, view)
+    canvas = checkerboard(*CANVAS).convert("RGB")
+    canvas = draw_mesh(canvas, texture, cols, rows, src, dst)
+    canvas = draw_mesh(canvas, sleeves, cols, rows, src, dst)
+    d = ImageDraw.Draw(canvas)
+    bone = (40, 170, 180)
+    for side in ("left", "right"):
+        chain = [view[f"{side}_hip"], view[f"{side}_shoulder"], view[f"{side}_elbow"]]
+        d.line(chain, fill=bone, width=4)
+        for x, y in chain:
+            d.ellipse([x - 7, y - 7, x + 7, y + 7], fill=(255, 255, 255), outline=bone, width=3)
+    d.line([view["left_shoulder"], view["right_shoulder"]], fill=bone, width=4)
+    return canvas
+
+
+def weights_image(entry, texture):
+    """The photo tinted by weight: red = left sleeve, blue = right sleeve, grey = torso."""
+    w, h = texture.size
+    ys, xs = np.mgrid[0:h, 0:w]
+    pts = np.stack([xs.ravel() + 0.5, ys.ravel() + 0.5], axis=1)
+    wt = vertex_weights(entry, pts).reshape(h, w, 3)
+    base = np.asarray(checkerboard(w, h).convert("RGB"), np.float32)
+    tex = np.asarray(texture, np.float32)
+    alpha = tex[..., 3:4] / 255
+    grey = tex[..., :3].mean(axis=2, keepdims=True).repeat(3, axis=2)
+    tint = (wt[..., 0:1] * grey + wt[..., 1:2] * np.array([235, 70, 60]) + wt[..., 2:3] * np.array([60, 110, 235]))
+    out = tint * alpha + base * (1 - alpha)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
+
+
+def clear_neck(texture, entry):
+    """Makes the collar's inside back transparent, as GarmentCatalog.loadLayers does."""
+    polygon = [(p["x"], p["y"]) for p in entry.get("neckOpening", [])]
+    if len(polygon) < 3:
+        return texture
+    scale = 4                                      # supersampled mask for an anti-aliased edge
+    mask = Image.new("L", (texture.width * scale, texture.height * scale), 0)
+    ImageDraw.Draw(mask).polygon([(x * scale, y * scale) for x, y in polygon], fill=255)
+    mask = mask.resize(texture.size, Image.LANCZOS)
+    alpha = np.asarray(texture.getchannel("A"), np.float32) * (1 - np.asarray(mask, np.float32) / 255)
+    out = texture.copy()
+    out.putalpha(Image.fromarray(alpha.astype(np.uint8), "L"))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--id", default=None)
+    args = ap.parse_args()
+    with open(os.path.join(REAL, "catalog.json"), encoding="utf-8") as handle:
+        catalog = json.load(handle)
+    for entry in catalog["garments"]:
+        if args.id and entry["id"] != args.id:
+            continue
+        texture = clear_neck(Image.open(os.path.join(REAL, entry["front"])).convert("RGBA"), entry)
+        sleeves = sleeve_only(texture, entry)
+        tiles = [("weights (red/blue = sleeves)", weights_image(entry, texture))]
+        for label, l, r in POSES:
+            tiles.append((label, render(entry, texture, sleeves, l, r)))
+        scale = 0.42
+        cells = [(label, im.resize((int(im.width * scale * (CANVAS[1] / im.height)) if i == 0 else int(im.width * scale),
+                                    int(CANVAS[1] * scale)), Image.LANCZOS)) for i, (label, im) in enumerate(tiles)]
+        width = sum(c[1].width for c in cells) + 20 * (len(cells) + 1)
+        sheet = Image.new("RGB", (width, cells[0][1].height + 50), (247, 249, 250))
+        d = ImageDraw.Draw(sheet)
+        x = 20
+        for label, im in cells:
+            d.text((x, 12), label, fill=(20, 24, 28))
+            sheet.paste(im, (x, 36))
+            x += im.width + 20
+        out = os.path.join("tools", f"mesh_preview_{entry['id']}.png")
+        sheet.save(out)
+        print(f"wrote {out}  ({sheet.width}x{sheet.height})")
+
+
+if __name__ == "__main__":
+    main()

@@ -17,3 +17,7 @@ local.properties
 /tools/garment_preview.png
 /tools/garment_articulation.png
 __pycache__/
+# Real-garment artwork stays local until its licence is confirmed or it is replaced by own photos.
+/app/src/main/assets/garments/real/
+/tools/garment_points_*.png
+/tools/mesh_preview_*.png

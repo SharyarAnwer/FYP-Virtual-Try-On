@@ -31,8 +31,12 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import com.google.mediapipe.framework.image.ByteBufferExtractor
 import com.google.mediapipe.tasks.core.Delegate
+import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
+import com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarkerResult
 import com.shahryar.virtualtryon.databinding.ActivityMainBinding
+import java.nio.ByteOrder
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -48,6 +52,7 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "VTO"
         const val STATS_INTERVAL_MS = 250L
+        const val PERF_LOG_INTERVAL_MS = 2000L
 
         /**
          * Frame rate floor requested from the camera's auto-exposure controller.
@@ -90,6 +95,14 @@ class MainActivity : AppCompatActivity() {
      */
     private var requestedDelegate = Delegate.CPU
 
+    /**
+     * Whether to ask the model for the person mask, which real garments are fitted to. On by
+     * default: measured on device it adds about 2.4 ms to inference, and unpacking and measuring
+     * it about 0.4 ms. The on-screen toggle stays so the cost can be re-measured A/B; with it off,
+     * garments keep the photo's own proportions.
+     */
+    private var requestedMasks = true
+
     private var garments: List<Garment> = emptyList()
     private val garmentLayers = mutableMapOf<String, GarmentLayers>()
 
@@ -98,6 +111,11 @@ class MainActivity : AppCompatActivity() {
 
     @Volatile private var garmentCount = 0
     @Volatile private var activeDelegate = "loading"
+    @Volatile private var masksActive = false
+
+    /** Analysis thread only. */
+    private val bodyWidth = BodyWidthMeter()
+    private var lastPerfLogAtMs = 0L
     @Volatile private var poseTracked = false
     @Volatile private var frameWidth = 0
     @Volatile private var frameHeight = 0
@@ -134,13 +152,26 @@ class MainActivity : AppCompatActivity() {
 
         binding.switchButton.setOnClickListener { toggleLens() }
         binding.delegateButton.setOnClickListener { toggleDelegate() }
+        binding.maskButton.setOnClickListener { toggleMasks() }
+        binding.fitButton.setOnClickListener {
+            val modes = OverlayView.FitMode.values()
+            binding.overlayView.fitMode = modes[(binding.overlayView.fitMode.ordinal + 1) % modes.size]
+            updateFitButton()
+        }
         binding.garmentButton.setOnClickListener { cycleGarment() }
+        binding.skeletonButton.setOnClickListener {
+            binding.overlayView.showSkeleton = !binding.overlayView.showSkeleton
+            updateSkeletonButton()
+        }
         binding.grantButton.setOnClickListener {
             cameraPermissionRequest.launch(Manifest.permission.CAMERA)
         }
 
         updateDelegateButton()
+        updateMaskButton()
+        updateFitButton()
         updateGarmentButton()
+        updateSkeletonButton()
         renderStats(0.0, 0.0, 0, 0)
         loadGarments()
         loadDetector()
@@ -187,12 +218,17 @@ class MainActivity : AppCompatActivity() {
     private fun loadDetector() {
         analysisExecutor.execute {
             poseDetector?.close()
-            val detector = PoseDetector.create(this, requestedDelegate)
+            val detector = PoseDetector.create(this, requestedDelegate, requestedMasks)
             poseDetector = detector
             activeDelegate = detector.delegateName
+            masksActive = detector.masksEnabled
+            bodyWidth.reset()
             perf.reset()
-            Log.i(TAG, "Pose detector ready on ${detector.delegateName}")
-            runOnUiThread { updateDelegateButton() }
+            Log.i(TAG, "Pose detector ready on ${detector.delegateName}, masks ${detector.masksEnabled}")
+            runOnUiThread {
+                updateDelegateButton()
+                updateMaskButton()
+            }
         }
     }
 
@@ -261,15 +297,22 @@ class MainActivity : AppCompatActivity() {
             frameWidth = upright.width
             frameHeight = upright.height
 
-            val landmarks = poseDetector
-                ?.detect(upright, SystemClock.uptimeMillis())
-                ?.landmarks()
-                ?.firstOrNull()
+            val result = poseDetector?.detect(upright, SystemClock.uptimeMillis())
+            val landmarks = result?.landmarks()?.firstOrNull()
+            val inferredNs = System.nanoTime()
 
             perf.recordPrep((preparedNs - startNs) / 1_000_000.0)
-            perf.recordInference((System.nanoTime() - preparedNs) / 1_000_000.0)
+            perf.recordInference((inferredNs - preparedNs) / 1_000_000.0)
+            val widths = if (masksActive && result != null && !landmarks.isNullOrEmpty()) {
+                measureBody(result, landmarks, inferredNs)
+            } else {
+                bodyWidth.reset()
+                null
+            }
 
             poseTracked = !landmarks.isNullOrEmpty()
+            binding.overlayView.setBodyWidths(widths)
+            binding.overlayView.setArmWidths(if (widths != null) bodyWidth.lastArms else null)
             binding.overlayView.setPose(landmarks, upright.width, upright.height)
         } catch (e: Exception) {
             Log.e(TAG, "Frame analysis failed", e)
@@ -278,6 +321,42 @@ class MainActivity : AppCompatActivity() {
             imageProxy.close()
         }
         publishStatsThrottled()
+        logPerfThrottled()
+    }
+
+    /**
+     * Unpacks the person mask and measures the torso on it; see [BodyWidthMeter].
+     *
+     * Timed in two parts. Unpacking happens once per frame however little of the mask is read,
+     * so if it dominates, the fix is to measure less often rather than to read less.
+     */
+    private fun measureBody(
+        result: PoseLandmarkerResult,
+        landmarks: List<NormalizedLandmark>,
+        startNs: Long
+    ): FloatArray? {
+        val mask = result.segmentationMasks().orElse(null)?.firstOrNull() ?: return null
+        val values = ByteBufferExtractor.extract(mask).duplicate()
+            .order(ByteOrder.nativeOrder()).asFloatBuffer()
+        val unpackedNs = System.nanoTime()
+        val widths = if (values.remaining() >= mask.width * mask.height) {
+            bodyWidth.measure(values, mask.width, mask.height, landmarks)
+        } else null
+        perf.recordUnpack((unpackedNs - startNs) / 1_000_000.0)
+        perf.recordMeasure((System.nanoTime() - unpackedNs) / 1_000_000.0)
+        return widths
+    }
+
+    /** One line to logcat every couple of seconds, so A/B runs can be read off without screenshots. */
+    private fun logPerfThrottled() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastPerfLogAtMs < PERF_LOG_INTERVAL_MS) return
+        lastPerfLogAtMs = now
+        Log.i(TAG, String.format(Locale.US,
+            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s ease=%.2f pose=%s",
+            perf.fps, perf.latencyMs, perf.prepMs, perf.inferenceMs, perf.unpackMs, perf.measureMs,
+            if (masksActive) "on" else "off", bodyWidth.measuredLevels, BodyWidthMeter.LEVELS.size,
+            binding.overlayView.fitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase, poseTracked))
     }
 
     /**
@@ -392,10 +471,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun updateSkeletonButton() {
+        binding.skeletonButton.setText(
+            if (binding.overlayView.showSkeleton) R.string.skeleton_on else R.string.skeleton_off
+        )
+    }
+
     private fun updateGarmentButton() {
         val chosen = garments.getOrNull(selectedGarment)
-        binding.garmentButton.text = chosen?.colourName?.replaceFirstChar { it.uppercase() }
-            ?: getString(R.string.garment_none)
+        // The garment's name, not its colour: real garments often share a colour.
+        binding.garmentButton.text = chosen?.name ?: getString(R.string.garment_none)
         binding.garmentButton.isEnabled = garments.isNotEmpty()
     }
 
@@ -415,6 +500,24 @@ class MainActivity : AppCompatActivity() {
         binding.delegateButton.text = requestedDelegate.name
     }
 
+    private fun toggleMasks() {
+        requestedMasks = !requestedMasks
+        updateMaskButton()
+        loadDetector()
+    }
+
+    private fun updateFitButton() {
+        binding.fitButton.setText(when (binding.overlayView.fitMode) {
+            OverlayView.FitMode.CHEST -> R.string.fit_chest
+            OverlayView.FitMode.ROWS -> R.string.fit_rows
+            OverlayView.FitMode.OFF -> R.string.fit_off
+        })
+    }
+
+    private fun updateMaskButton() {
+        binding.maskButton.setText(if (requestedMasks) R.string.mask_on else R.string.mask_off)
+    }
+
     private fun publishStatsThrottled() {
         val now = SystemClock.elapsedRealtime()
         if (now - lastStatsAtMs < STATS_INTERVAL_MS) return
@@ -432,13 +535,17 @@ class MainActivity : AppCompatActivity() {
         val resolution = if (w > 0 && h > 0) "${w}x$h" else "--"
         val aeRange = appliedFpsRange?.let { "${it.lower}-${it.upper}" } ?: "default"
         val tracking = if (poseTracked) "TRACKED" else "none"
+        val unpack = if (masksActive) String.format(Locale.US, "%8.1f ms", perf.unpackMs) else "     off"
+        val measure = if (masksActive) String.format(Locale.US, "%8.1f ms", perf.measureMs) else "     off"
+        val width = if (masksActive) "${bodyWidth.measuredLevels}/${BodyWidthMeter.LEVELS.size}" else "off"
         binding.statsText.text = String.format(
             Locale.US,
             "FPS      %8.1f\nLATENCY  %8.1f ms\n  prep   %8.1f ms\n  infer  %8.1f ms\n" +
+                "  unpack%s\n  measure%s\n" +
                 "FRAME    %8s\nCAMERA   %8s\nAE LOCK  %8s\nMODEL    %8s\n" +
-                "DELEGATE %8s\nPOSE     %8s\nGARMENTS %8d",
-            fps, latencyMs, perf.prepMs, perf.inferenceMs,
-            resolution, lens, aeRange, "lite", activeDelegate, tracking, garmentCount
+                "DELEGATE %8s\nPOSE     %8s\nWIDTH    %8s\nGARMENTS %8d",
+            fps, latencyMs, perf.prepMs, perf.inferenceMs, unpack, measure,
+            resolution, lens, aeRange, "lite", activeDelegate, tracking, width, garmentCount
         )
     }
 
