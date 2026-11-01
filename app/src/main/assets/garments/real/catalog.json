@@ -1,0 +1,1219 @@
+{
+  "schemaVersion": 3,
+  "garments": [
+    {
+      "id": "polo_pink",
+      "name": "Pink Polo",
+      "category": "upper_body",
+      "render": "mesh",
+      "imageWidth": 768,
+      "imageHeight": 1024,
+      "front": "polo_pink_front.png",
+      "back": "polo_pink_back.png",
+      "anchors": {
+        "left_shoulder": {
+          "x": 177.9,
+          "y": 221.8
+        },
+        "right_shoulder": {
+          "x": 592.1,
+          "y": 222.8
+        },
+        "left_elbow": {
+          "x": 55.4,
+          "y": 543.0
+        },
+        "left_hip": {
+          "x": 162.0,
+          "y": 822.4
+        },
+        "right_elbow": {
+          "x": 711.0,
+          "y": 545.3
+        },
+        "right_hip": {
+          "x": 606.0,
+          "y": 823.4
+        }
+      },
+      "armholes": {
+        "left": {
+          "shoulder": {
+            "x": 119.5,
+            "y": 169.0
+          },
+          "armpit": {
+            "x": 175.0,
+            "y": 414.0
+          },
+          "below": {
+            "x": 147.9,
+            "y": 510.2
+          },
+          "cuffOuter": {
+            "x": 40.0,
+            "y": 415.0
+          },
+          "cuffInner": {
+            "x": 157.0,
+            "y": 445.0
+          }
+        },
+        "right": {
+          "shoulder": {
+            "x": 650.5,
+            "y": 175.0
+          },
+          "armpit": {
+            "x": 589.0,
+            "y": 408.0
+          },
+          "below": {
+            "x": 616.0,
+            "y": 504.3
+          },
+          "cuffOuter": {
+            "x": 727.0,
+            "y": 415.0
+          },
+          "cuffInner": {
+            "x": 610.0,
+            "y": 445.0
+          }
+        }
+      },
+      "colour": {
+        "name": "pink",
+        "hex": "#AD4D6B"
+      },
+      "gender": "unisex",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false,
+      "neckOpening": [
+        {
+          "x": 316.2,
+          "y": 35.0
+        },
+        {
+          "x": 455.0,
+          "y": 35.0
+        },
+        {
+          "x": 458.0,
+          "y": 52.5
+        },
+        {
+          "x": 461.5,
+          "y": 67.0
+        },
+        {
+          "x": 391.2,
+          "y": 139.5
+        },
+        {
+          "x": 385.0,
+          "y": 144.5
+        },
+        {
+          "x": 378.0,
+          "y": 139.5
+        },
+        {
+          "x": 310.0,
+          "y": 71.5
+        },
+        {
+          "x": 313.2,
+          "y": 52.5
+        }
+      ]
+    },
+    {
+      "id": "white_shirt",
+      "name": "White Waffle Shirt",
+      "category": "upper_body",
+      "render": "mesh",
+      "imageWidth": 1178,
+      "imageHeight": 1024,
+      "front": "white_shirt_front.png",
+      "back": null,
+      "anchors": {
+        "left_shoulder": {
+          "x": 402.0,
+          "y": 193.7
+        },
+        "right_shoulder": {
+          "x": 790.0,
+          "y": 191.7
+        },
+        "left_elbow": {
+          "x": 109.9,
+          "y": 329.4
+        },
+        "left_hip": {
+          "x": 181.0,
+          "y": 756.3
+        },
+        "right_elbow": {
+          "x": 1066.5,
+          "y": 356.8
+        },
+        "right_hip": {
+          "x": 1008.0,
+          "y": 754.3
+        }
+      },
+      "armholes": {
+        "left": {
+          "shoulder": {
+            "x": 347.3,
+            "y": 132.0
+          },
+          "armpit": {
+            "x": 207.0,
+            "y": 403.0
+          },
+          "below": {
+            "x": 151.8,
+            "y": 486.4
+          },
+          "cuffOuter": {
+            "x": 38.0,
+            "y": 243.0
+          },
+          "cuffInner": {
+            "x": 130.0,
+            "y": 440.0
+          }
+        },
+        "right": {
+          "shoulder": {
+            "x": 844.7,
+            "y": 131.0
+          },
+          "armpit": {
+            "x": 938.5,
+            "y": 427.0
+          },
+          "below": {
+            "x": 996.1,
+            "y": 508.8
+          },
+          "cuffOuter": {
+            "x": 1138.0,
+            "y": 260.0
+          },
+          "cuffInner": {
+            "x": 1019.0,
+            "y": 468.0
+          }
+        }
+      },
+      "colour": {
+        "name": "white",
+        "hex": "#D3D8D5"
+      },
+      "gender": "unisex",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false,
+      "neckOpening": [
+        {
+          "x": 542.0,
+          "y": 90.0
+        },
+        {
+          "x": 560.0,
+          "y": 82.0
+        },
+        {
+          "x": 606.0,
+          "y": 80.0
+        },
+        {
+          "x": 662.0,
+          "y": 82.0
+        },
+        {
+          "x": 664.0,
+          "y": 100.0
+        },
+        {
+          "x": 661.0,
+          "y": 122.0
+        },
+        {
+          "x": 650.0,
+          "y": 140.0
+        },
+        {
+          "x": 632.0,
+          "y": 155.0
+        },
+        {
+          "x": 610.0,
+          "y": 163.0
+        },
+        {
+          "x": 590.0,
+          "y": 174.0
+        },
+        {
+          "x": 579.0,
+          "y": 183.0
+        },
+        {
+          "x": 566.0,
+          "y": 165.0
+        },
+        {
+          "x": 556.0,
+          "y": 147.0
+        },
+        {
+          "x": 548.0,
+          "y": 130.0
+        },
+        {
+          "x": 543.0,
+          "y": 110.0
+        }
+      ]
+    },
+    {
+      "id": "grey_tee",
+      "name": "Grey Tee",
+      "category": "upper_body",
+      "render": "mesh",
+      "imageWidth": 909,
+      "imageHeight": 1024,
+      "front": "grey_tee_front.png",
+      "back": null,
+      "anchors": {
+        "left_shoulder": {
+          "x": 209.8,
+          "y": 224.5
+        },
+        "right_shoulder": {
+          "x": 697.2,
+          "y": 219.5
+        },
+        "left_elbow": {
+          "x": -47.9,
+          "y": 536.5
+        },
+        "left_hip": {
+          "x": 175.0,
+          "y": 931.4
+        },
+        "right_elbow": {
+          "x": 921.6,
+          "y": 556.3
+        },
+        "right_hip": {
+          "x": 696.0,
+          "y": 926.4
+        }
+      },
+      "armholes": {
+        "left": {
+          "shoulder": {
+            "x": 141.0,
+            "y": 162.0
+          },
+          "armpit": {
+            "x": 202.0,
+            "y": 364.0
+          },
+          "below": {
+            "x": 155.1,
+            "y": 452.3
+          },
+          "cuffOuter": {
+            "x": 39.0,
+            "y": 323.0
+          },
+          "cuffInner": {
+            "x": 155.0,
+            "y": 399.0
+          }
+        },
+        "right": {
+          "shoulder": {
+            "x": 766.0,
+            "y": 157.0
+          },
+          "armpit": {
+            "x": 700.0,
+            "y": 375.0
+          },
+          "below": {
+            "x": 733.6,
+            "y": 469.2
+          },
+          "cuffOuter": {
+            "x": 869.0,
+            "y": 333.0
+          },
+          "cuffInner": {
+            "x": 724.0,
+            "y": 404.0
+          }
+        }
+      },
+      "colour": {
+        "name": "grey",
+        "hex": "#A5A8B6"
+      },
+      "gender": "unisex",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false,
+      "neckOpening": [
+        {
+          "x": 338.0,
+          "y": 40.0
+        },
+        {
+          "x": 566.0,
+          "y": 30.0
+        },
+        {
+          "x": 561.0,
+          "y": 66.0
+        },
+        {
+          "x": 549.0,
+          "y": 83.0
+        },
+        {
+          "x": 533.0,
+          "y": 99.0
+        },
+        {
+          "x": 513.0,
+          "y": 113.0
+        },
+        {
+          "x": 489.0,
+          "y": 125.0
+        },
+        {
+          "x": 460.0,
+          "y": 132.0
+        },
+        {
+          "x": 430.0,
+          "y": 133.0
+        },
+        {
+          "x": 404.0,
+          "y": 127.0
+        },
+        {
+          "x": 384.0,
+          "y": 115.0
+        },
+        {
+          "x": 367.0,
+          "y": 99.0
+        },
+        {
+          "x": 355.0,
+          "y": 81.0
+        },
+        {
+          "x": 346.0,
+          "y": 62.0
+        }
+      ]
+    },
+    {
+      "id": "navy_polo",
+      "name": "Navy Polo",
+      "category": "upper_body",
+      "render": "mesh",
+      "imageWidth": 767,
+      "imageHeight": 1024,
+      "front": "navy_polo_front.png",
+      "back": "navy_polo_back.png",
+      "anchors": {
+        "left_shoulder": {
+          "x": 177.5,
+          "y": 220.3
+        },
+        "right_shoulder": {
+          "x": 589.5,
+          "y": 221.3
+        },
+        "left_elbow": {
+          "x": 51.5,
+          "y": 538.3
+        },
+        "left_hip": {
+          "x": 160.0,
+          "y": 817.8
+        },
+        "right_elbow": {
+          "x": 707.3,
+          "y": 542.4
+        },
+        "right_hip": {
+          "x": 604.0,
+          "y": 818.8
+        }
+      },
+      "armholes": {
+        "left": {
+          "shoulder": {
+            "x": 119.4,
+            "y": 166.0
+          },
+          "armpit": {
+            "x": 173.0,
+            "y": 414.0
+          },
+          "below": {
+            "x": 141.8,
+            "y": 509.0
+          },
+          "cuffOuter": {
+            "x": 38.0,
+            "y": 413.0
+          },
+          "cuffInner": {
+            "x": 152.0,
+            "y": 444.0
+          }
+        },
+        "right": {
+          "shoulder": {
+            "x": 647.6,
+            "y": 171.0
+          },
+          "armpit": {
+            "x": 588.0,
+            "y": 409.0
+          },
+          "below": {
+            "x": 612.9,
+            "y": 505.8
+          },
+          "cuffOuter": {
+            "x": 725.0,
+            "y": 413.0
+          },
+          "cuffInner": {
+            "x": 606.0,
+            "y": 444.0
+          }
+        }
+      },
+      "colour": {
+        "name": "navy",
+        "hex": "#1B2136"
+      },
+      "gender": "unisex",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false,
+      "neckOpening": [
+        {
+          "x": 316.2,
+          "y": 35.0
+        },
+        {
+          "x": 455.0,
+          "y": 35.0
+        },
+        {
+          "x": 458.0,
+          "y": 52.5
+        },
+        {
+          "x": 461.5,
+          "y": 67.0
+        },
+        {
+          "x": 391.2,
+          "y": 139.5
+        },
+        {
+          "x": 385.0,
+          "y": 144.5
+        },
+        {
+          "x": 378.0,
+          "y": 139.5
+        },
+        {
+          "x": 310.0,
+          "y": 71.5
+        },
+        {
+          "x": 313.2,
+          "y": 52.5
+        }
+      ]
+    },
+    {
+      "id": "green_polo",
+      "name": "Green Polo",
+      "category": "upper_body",
+      "render": "mesh",
+      "imageWidth": 767,
+      "imageHeight": 1024,
+      "front": "green_polo_front.png",
+      "back": "green_polo_back.png",
+      "anchors": {
+        "left_shoulder": {
+          "x": 180.1,
+          "y": 220.9
+        },
+        "right_shoulder": {
+          "x": 589.9,
+          "y": 222.9
+        },
+        "left_elbow": {
+          "x": 55.4,
+          "y": 537.4
+        },
+        "left_hip": {
+          "x": 162.0,
+          "y": 815.2
+        },
+        "right_elbow": {
+          "x": 707.2,
+          "y": 542.2
+        },
+        "right_hip": {
+          "x": 605.0,
+          "y": 817.2
+        }
+      },
+      "armholes": {
+        "left": {
+          "shoulder": {
+            "x": 122.3,
+            "y": 167.0
+          },
+          "armpit": {
+            "x": 174.5,
+            "y": 415.0
+          },
+          "below": {
+            "x": 145.0,
+            "y": 510.5
+          },
+          "cuffOuter": {
+            "x": 40.0,
+            "y": 416.0
+          },
+          "cuffInner": {
+            "x": 155.0,
+            "y": 445.0
+          }
+        },
+        "right": {
+          "shoulder": {
+            "x": 647.7,
+            "y": 173.0
+          },
+          "armpit": {
+            "x": 588.0,
+            "y": 410.0
+          },
+          "below": {
+            "x": 614.1,
+            "y": 506.5
+          },
+          "cuffOuter": {
+            "x": 725.0,
+            "y": 415.0
+          },
+          "cuffInner": {
+            "x": 607.0,
+            "y": 445.0
+          }
+        }
+      },
+      "colour": {
+        "name": "green",
+        "hex": "#115C3E"
+      },
+      "gender": "unisex",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false,
+      "neckOpening": [
+        {
+          "x": 316.2,
+          "y": 35.0
+        },
+        {
+          "x": 455.0,
+          "y": 35.0
+        },
+        {
+          "x": 458.0,
+          "y": 52.5
+        },
+        {
+          "x": 461.5,
+          "y": 67.0
+        },
+        {
+          "x": 391.2,
+          "y": 139.5
+        },
+        {
+          "x": 385.0,
+          "y": 144.5
+        },
+        {
+          "x": 378.0,
+          "y": 139.5
+        },
+        {
+          "x": 310.0,
+          "y": 71.5
+        },
+        {
+          "x": 313.2,
+          "y": 52.5
+        }
+      ]
+    },
+    {
+      "id": "yellow_polo",
+      "name": "Yellow Polo",
+      "category": "upper_body",
+      "render": "mesh",
+      "imageWidth": 767,
+      "imageHeight": 1024,
+      "front": "yellow_polo_front.png",
+      "back": "yellow_polo_back.png",
+      "anchors": {
+        "left_shoulder": {
+          "x": 178.5,
+          "y": 222.3
+        },
+        "right_shoulder": {
+          "x": 590.5,
+          "y": 224.3
+        },
+        "left_elbow": {
+          "x": 54.4,
+          "y": 541.0
+        },
+        "left_hip": {
+          "x": 162.0,
+          "y": 819.8
+        },
+        "right_elbow": {
+          "x": 709.5,
+          "y": 544.9
+        },
+        "right_hip": {
+          "x": 605.0,
+          "y": 821.8
+        }
+      },
+      "armholes": {
+        "left": {
+          "shoulder": {
+            "x": 120.4,
+            "y": 169.0
+          },
+          "armpit": {
+            "x": 174.5,
+            "y": 415.0
+          },
+          "below": {
+            "x": 147.3,
+            "y": 511.2
+          },
+          "cuffOuter": {
+            "x": 41.0,
+            "y": 408.0
+          },
+          "cuffInner": {
+            "x": 157.0,
+            "y": 445.0
+          }
+        },
+        "right": {
+          "shoulder": {
+            "x": 648.6,
+            "y": 175.0
+          },
+          "armpit": {
+            "x": 588.5,
+            "y": 410.0
+          },
+          "below": {
+            "x": 615.1,
+            "y": 506.4
+          },
+          "cuffOuter": {
+            "x": 725.0,
+            "y": 413.0
+          },
+          "cuffInner": {
+            "x": 608.0,
+            "y": 445.0
+          }
+        }
+      },
+      "colour": {
+        "name": "yellow",
+        "hex": "#B9B90B"
+      },
+      "gender": "unisex",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false,
+      "neckOpening": [
+        {
+          "x": 316.2,
+          "y": 35.0
+        },
+        {
+          "x": 455.0,
+          "y": 35.0
+        },
+        {
+          "x": 458.0,
+          "y": 52.5
+        },
+        {
+          "x": 461.5,
+          "y": 67.0
+        },
+        {
+          "x": 391.2,
+          "y": 139.5
+        },
+        {
+          "x": 385.0,
+          "y": 144.5
+        },
+        {
+          "x": 378.0,
+          "y": 139.5
+        },
+        {
+          "x": 310.0,
+          "y": 71.5
+        },
+        {
+          "x": 313.2,
+          "y": 52.5
+        }
+      ]
+    },
+    {
+      "id": "maroon_polo",
+      "name": "Maroon Polo",
+      "category": "upper_body",
+      "render": "mesh",
+      "imageWidth": 767,
+      "imageHeight": 1024,
+      "front": "maroon_polo_front.png",
+      "back": "maroon_polo_back.png",
+      "anchors": {
+        "left_shoulder": {
+          "x": 176.9,
+          "y": 223.8
+        },
+        "right_shoulder": {
+          "x": 591.1,
+          "y": 224.8
+        },
+        "left_elbow": {
+          "x": 52.4,
+          "y": 544.2
+        },
+        "left_hip": {
+          "x": 162.0,
+          "y": 824.4
+        },
+        "right_elbow": {
+          "x": 709.0,
+          "y": 547.7
+        },
+        "right_hip": {
+          "x": 605.0,
+          "y": 825.4
+        }
+      },
+      "armholes": {
+        "left": {
+          "shoulder": {
+            "x": 118.5,
+            "y": 171.0
+          },
+          "armpit": {
+            "x": 174.0,
+            "y": 415.0
+          },
+          "below": {
+            "x": 144.0,
+            "y": 510.4
+          },
+          "cuffOuter": {
+            "x": 40.0,
+            "y": 414.0
+          },
+          "cuffInner": {
+            "x": 154.0,
+            "y": 445.0
+          }
+        },
+        "right": {
+          "shoulder": {
+            "x": 649.5,
+            "y": 177.0
+          },
+          "armpit": {
+            "x": 588.0,
+            "y": 410.0
+          },
+          "below": {
+            "x": 614.1,
+            "y": 506.5
+          },
+          "cuffOuter": {
+            "x": 725.0,
+            "y": 415.0
+          },
+          "cuffInner": {
+            "x": 607.0,
+            "y": 445.0
+          }
+        }
+      },
+      "colour": {
+        "name": "maroon",
+        "hex": "#4D0519"
+      },
+      "gender": "unisex",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false,
+      "neckOpening": [
+        {
+          "x": 316.2,
+          "y": 35.0
+        },
+        {
+          "x": 455.0,
+          "y": 35.0
+        },
+        {
+          "x": 458.0,
+          "y": 52.5
+        },
+        {
+          "x": 461.5,
+          "y": 67.0
+        },
+        {
+          "x": 391.2,
+          "y": 139.5
+        },
+        {
+          "x": 385.0,
+          "y": 144.5
+        },
+        {
+          "x": 378.0,
+          "y": 139.5
+        },
+        {
+          "x": 310.0,
+          "y": 71.5
+        },
+        {
+          "x": 313.2,
+          "y": 52.5
+        }
+      ]
+    }
+  ],
+  "note": "Real garments, drawn by mesh warping. Written by tools/garment_points.py; anchors are derived from detected garment points, so re-run it after replacing a photo rather than editing anchors by hand."
+}
