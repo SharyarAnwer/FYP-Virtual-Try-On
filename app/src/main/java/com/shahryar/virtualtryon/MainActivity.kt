@@ -103,11 +103,18 @@ class MainActivity : AppCompatActivity() {
      */
     private var requestedMasks = true
 
-    private var garments: List<Garment> = emptyList()
+    /** The catalog's upper-body garments, which the Top button steps through. */
+    private var tops: List<Garment> = emptyList()
+
+    /** The catalog's lower-body garments, which the Bottom button steps through (M4). */
+    private var bottoms: List<Garment> = emptyList()
     private val garmentLayers = mutableMapOf<String, GarmentLayers>()
 
-    /** Index into [garments]; -1 shows no garment. */
-    private var selectedGarment = -1
+    /** Index into [tops]; -1 wears no top. */
+    private var selectedTop = -1
+
+    /** Index into [bottoms]; -1 wears no bottom. */
+    private var selectedBottom = -1
 
     @Volatile private var garmentCount = 0
     @Volatile private var activeDelegate = "loading"
@@ -158,7 +165,18 @@ class MainActivity : AppCompatActivity() {
             binding.overlayView.fitMode = modes[(binding.overlayView.fitMode.ordinal + 1) % modes.size]
             updateFitButton()
         }
-        binding.garmentButton.setOnClickListener { cycleGarment() }
+        binding.topButton.setOnClickListener {
+            if (tops.isEmpty()) return@setOnClickListener
+            selectedTop = if (selectedTop + 1 >= tops.size) -1 else selectedTop + 1
+            updateGarmentButtons()
+            wear(OverlayView.Slot.TOP)
+        }
+        binding.bottomButton.setOnClickListener {
+            if (bottoms.isEmpty()) return@setOnClickListener
+            selectedBottom = if (selectedBottom + 1 >= bottoms.size) -1 else selectedBottom + 1
+            updateGarmentButtons()
+            wear(OverlayView.Slot.BOTTOM)
+        }
         binding.skeletonButton.setOnClickListener {
             binding.overlayView.showSkeleton = !binding.overlayView.showSkeleton
             updateSkeletonButton()
@@ -170,7 +188,7 @@ class MainActivity : AppCompatActivity() {
         updateDelegateButton()
         updateMaskButton()
         updateFitButton()
-        updateGarmentButton()
+        updateGarmentButtons()
         updateSkeletonButton()
         renderStats(0.0, 0.0, 0, 0)
         loadGarments()
@@ -197,10 +215,11 @@ class MainActivity : AppCompatActivity() {
     private fun loadGarments() {
         analysisExecutor.execute {
             val loaded = GarmentCatalog.load(this)
-            garments = loaded
+            tops = loaded.filter { it.category == "upper_body" }
+            bottoms = loaded.filter { it.category == "lower_body" }
             garmentCount = loaded.size
-            Log.i(TAG, "Garment catalog: ${loaded.size} loaded")
-            runOnUiThread { updateGarmentButton() }
+            Log.i(TAG, "Garment catalog: ${loaded.size} loaded, ${tops.size} tops, ${bottoms.size} bottoms")
+            runOnUiThread { updateGarmentButtons() }
             loaded.forEach { g ->
                 val flag = if (g.isPlaceholder) " [placeholder]" else ""
                 Log.i(TAG, "  ${g.id}: ${g.category}, ${g.colourName}, ${g.gender}, " +
@@ -445,21 +464,26 @@ class MainActivity : AppCompatActivity() {
         bindUseCases()
     }
 
+    /** The garment selected for [slot], or null for none. */
+    private fun selected(slot: OverlayView.Slot): Garment? = when (slot) {
+        OverlayView.Slot.TOP -> tops.getOrNull(selectedTop)
+        OverlayView.Slot.BOTTOM -> bottoms.getOrNull(selectedBottom)
+    }
+
     /**
-     * Steps through the catalog: none, then each garment, then back to none.
+     * Puts the garment selected for [slot] on the overlay, or takes it off. The two buttons each
+     * step through their own list - none, then each garment, then back to none - and neither
+     * touches the other's garment.
      *
      * Every layer is decoded on the analysis thread and cached by garment id. Decoding several
      * 512x640 PNGs takes long enough to drop frames if done on the UI thread, and the cache means
-     * switching back to a garment costs nothing the second time.
+     * switching back to a garment costs nothing the second time. A garment still decoding when the
+     * button is pressed again is dropped rather than shown late over the newer choice.
      */
-    private fun cycleGarment() {
-        if (garments.isEmpty()) return
-        selectedGarment = if (selectedGarment + 1 >= garments.size) -1 else selectedGarment + 1
-        updateGarmentButton()
-
-        val chosen = garments.getOrNull(selectedGarment)
+    private fun wear(slot: OverlayView.Slot) {
+        val chosen = selected(slot)
         if (chosen == null) {
-            binding.overlayView.setGarment(null, null)
+            binding.overlayView.setGarment(slot, null, null)
             return
         }
 
@@ -467,7 +491,9 @@ class MainActivity : AppCompatActivity() {
             val layers = garmentLayers.getOrPut(chosen.id) {
                 GarmentCatalog.loadLayers(this, chosen) ?: return@execute
             }
-            runOnUiThread { binding.overlayView.setGarment(layers, chosen) }
+            runOnUiThread {
+                if (selected(slot) == chosen) binding.overlayView.setGarment(slot, layers, chosen)
+            }
         }
     }
 
@@ -477,11 +503,12 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun updateGarmentButton() {
-        val chosen = garments.getOrNull(selectedGarment)
+    private fun updateGarmentButtons() {
         // The garment's name, not its colour: real garments often share a colour.
-        binding.garmentButton.text = chosen?.name ?: getString(R.string.garment_none)
-        binding.garmentButton.isEnabled = garments.isNotEmpty()
+        binding.topButton.text = selected(OverlayView.Slot.TOP)?.name ?: getString(R.string.top_none)
+        binding.topButton.isEnabled = tops.isNotEmpty()
+        binding.bottomButton.text = selected(OverlayView.Slot.BOTTOM)?.name ?: getString(R.string.bottom_none)
+        binding.bottomButton.isEnabled = bottoms.isNotEmpty()
     }
 
     /**

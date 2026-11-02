@@ -57,6 +57,12 @@ class OverlayView @JvmOverloads constructor(
         const val LEFT_ELBOW = 13
         const val RIGHT_ELBOW = 14
 
+        // Leg landmarks, for trousers (M4).
+        const val LEFT_KNEE = 25
+        const val RIGHT_KNEE = 26
+        const val LEFT_ANKLE = 27
+        const val RIGHT_ANKLE = 28
+
         // Face landmarks used to keep the garment behind the chin.
         const val LEFT_EYE = 2
         const val RIGHT_EYE = 5
@@ -271,6 +277,56 @@ class OverlayView @JvmOverloads constructor(
     }
 
     /**
+     * Everything needed to draw one pair of trousers (M4). Bone matrices and vertex buffers are
+     * allocated here, once, and reused every frame.
+     */
+    private class TrouserRender(
+        val front: Bitmap,
+        val mesh: TrouserMesh,
+        val leftHip: Anchor,
+        val rightHip: Anchor,
+        val leftKnee: Anchor,
+        val rightKnee: Anchor,
+        val leftAnkle: Anchor,
+        val rightAnkle: Anchor
+    ) {
+        /** Pelvis, left leg, right leg — the order of [TrouserMesh.weights]. */
+        val bones = Array(TrouserMesh.BONES) { Matrix() }
+        val placed = Array(TrouserMesh.BONES) { FloatArray(mesh.vertexCount * 2) }
+        val vertices = FloatArray(mesh.vertexCount * 2)
+
+        /** The hip anchors' spacing, in artwork px. */
+        val hipSpan = hypot(rightHip.x - leftHip.x, rightHip.y - leftHip.y)
+
+        private val leftLeg = hypot(leftAnkle.x - leftHip.x, leftAnkle.y - leftHip.y)
+        private val rightLeg = hypot(rightAnkle.x - rightHip.x, rightAnkle.y - rightHip.y)
+
+        /** The two legs' mean length, hip to ankle, in artwork px. */
+        val legLength = (leftLeg + rightLeg) / 2f
+
+        /** Per leg, hip to ankle over hip to knee: a wearer's thigh times this is their leg. */
+        val legPerThigh = floatArrayOf(
+            leftLeg / hypot(leftKnee.x - leftHip.x, leftKnee.y - leftHip.y),
+            rightLeg / hypot(rightKnee.x - rightHip.x, rightKnee.y - rightHip.y)
+        )
+
+        companion object {
+            fun from(garment: Garment, layers: GarmentLayers): TrouserRender? {
+                return TrouserRender(
+                    front = layers.meshFront ?: return null,
+                    mesh = layers.trousers ?: return null,
+                    leftHip = garment.anchor("left_hip") ?: return null,
+                    rightHip = garment.anchor("right_hip") ?: return null,
+                    leftKnee = garment.anchor("left_knee") ?: return null,
+                    rightKnee = garment.anchor("right_knee") ?: return null,
+                    leftAnkle = garment.anchor("left_ankle") ?: return null,
+                    rightAnkle = garment.anchor("right_ankle") ?: return null
+                )
+            }
+        }
+    }
+
+    /**
      * One sleeve's own axes on the garment photo: its centre line, from the middle of the armhole
      * to the middle of the cuff, and the direction across it. [origin] is the shoulder joint moved
      * onto that line; [length] runs from there to the elbow anchor along it; [width] is the cuff's
@@ -363,6 +419,8 @@ class OverlayView @JvmOverloads constructor(
 
     private val torsoMatrix = Matrix()
     private val torsoInverse = Matrix()
+    private val pelvisMatrix = Matrix()
+    private val pelvisInverse = Matrix()
     private val matrixValues = FloatArray(9)
     private val vector = FloatArray(2)
     private val src = FloatArray(6)
@@ -381,7 +439,6 @@ class OverlayView @JvmOverloads constructor(
     /** Previous smoothed frame. Analysis thread only. */
     private var previous: FloatArray? = null
 
-    @Volatile private var render: GarmentRender? = null
 
     /**
      * Whether to draw the pose skeleton. Off by default: drawn over a garment, its lines and
@@ -393,7 +450,15 @@ class OverlayView @JvmOverloads constructor(
             field = value
             postInvalidate()
         }
-    @Volatile private var meshRender: MeshRender? = null
+
+    /** The two garments that can be worn together (M4): a shirt and a pair of trousers. */
+    enum class Slot { TOP, BOTTOM }
+
+    /** One slot's garment, ready to draw: layered (M3.5), a mesh shirt (M3.6) or trousers (M4). */
+    private class Worn(val layered: GarmentRender?, val meshed: MeshRender?, val trousers: TrouserRender?)
+
+    @Volatile private var top: Worn? = null
+    @Volatile private var bottom: Worn? = null
 
     /** Latest body-width snapshot from [BodyWidthMeter], or null. Drawn with the skeleton. */
     @Volatile private var bodyWidths: FloatArray? = null
@@ -446,22 +511,29 @@ class OverlayView @JvmOverloads constructor(
     }
 
     /**
-     * Sets the garment to render, or clears it when either argument is null. [layers] must be in
-     * the same order as [Garment.parts].
+     * Sets the garment worn in [slot], or clears it when either argument is null. [layers] must be
+     * in the same order as [Garment.parts].
      */
-    fun setGarment(layers: GarmentLayers?, garment: Garment?) {
+    fun setGarment(slot: Slot, layers: GarmentLayers?, garment: Garment?) {
         var layered: GarmentRender? = null
         var meshed: MeshRender? = null
+        var trousers: TrouserRender? = null
         if (layers != null && garment != null) {
-            if (garment.render == RenderKind.MESH) {
+            if (layers.trousers != null) {
+                trousers = TrouserRender.from(garment, layers)
+            } else if (garment.render == RenderKind.MESH) {
                 meshed = MeshRender.from(garment, layers)
             } else if (layers.fills.size == garment.parts.size &&
                 layers.outlines.size == garment.parts.size && layers.seams.size == garment.parts.size) {
                 layered = GarmentRender(garment, layers)
             }
         }
-        render = layered
-        meshRender = meshed
+        val worn = if (layered == null && meshed == null && trousers == null) null
+            else Worn(layered, meshed, trousers)
+        when (slot) {
+            Slot.TOP -> top = worn
+            Slot.BOTTOM -> bottom = worn
+        }
         postInvalidate()
     }
 
@@ -513,7 +585,10 @@ class OverlayView @JvmOverloads constructor(
         val faceSeen = computeFace(snapshot)
         val checkpoint = canvas.save()
         if (faceSeen) canvas.clipOutPath(facePath)
-        val wearingGarment = drawGarment(canvas, snapshot)
+        // The bottom first, so a shirt's hem covers the trousers' waistband, as when it is worn out.
+        val wearingBottom = bottom?.let { drawGarment(canvas, snapshot, it) } ?: false
+        val wearingTop = top?.let { drawGarment(canvas, snapshot, it) } ?: false
+        val wearingGarment = wearingBottom || wearingTop
         canvas.restoreToCount(checkpoint)
         if (showSkeleton) {
             drawSkeleton(canvas, snapshot, dimmed = wearingGarment)
@@ -613,14 +688,15 @@ class OverlayView @JvmOverloads constructor(
      * position on the body instead of letting it vanish.
      *
      * The whole garment still needs the torso's four landmarks. Without them there is nothing to
-     * hang the limbs from.
+     * hang the limbs from. Trousers go to [drawTrousers] instead, which needs only the hips.
      */
-    private fun drawGarment(canvas: Canvas, p: FloatArray): Boolean {
+    private fun drawGarment(canvas: Canvas, p: FloatArray, worn: Worn): Boolean {
+        worn.trousers?.let { return drawTrousers(canvas, p, it) }
         if (!visible(p, LEFT_SHOULDER) || !visible(p, RIGHT_SHOULDER) ||
             !visible(p, LEFT_HIP) || !visible(p, RIGHT_HIP)) return false
-        meshRender?.let { return drawMeshGarment(canvas, p, it) }
+        worn.meshed?.let { return drawMeshGarment(canvas, p, it) }
 
-        val r = render ?: return false
+        val r = worn.layered ?: return false
         val handedness = computeTorso(p, r.leftShoulder ?: return false, r.rightShoulder ?: return false,
             r.leftHip ?: return false, r.rightHip ?: return false)
         if (handedness == 0f) return false
@@ -766,6 +842,118 @@ class OverlayView @JvmOverloads constructor(
         canvas.drawBitmapMesh(m.front, cols, rows, out, 0, null, 0, garmentPaint)
         canvas.drawBitmapMesh(m.sleeves, cols, rows, out, 0, null, 0, garmentPaint)
         return true
+    }
+
+    /**
+     * Draws a pair of trousers bent over its grid (M4). Returns whether anything was drawn.
+     *
+     * Three bones. The pelvis, from [computePelvis], carries the waistband. Each leg swings from
+     * its hip to its ankle: as long as the wearer's leg and as wide as the pelvis is across it,
+     * through [segmentMatrix] as for a shirt's sleeves. Straight legs for now: the knee only
+     * points the leg when the ankle is out of sight, and a leg with neither in sight hangs from
+     * the pelvis at rest. Every grid vertex then moves to the weighted blend of where each bone
+     * would put it, as for a shirt.
+     *
+     * Needs both hips. Mirrors place() in tools/preview_trousers.py. Change the two together.
+     */
+    private fun drawTrousers(canvas: Canvas, p: FloatArray, t: TrouserRender): Boolean {
+        if (!visible(p, LEFT_HIP) || !visible(p, RIGHT_HIP)) return false
+        val handedness = computePelvis(p, t)
+        if (handedness == 0f) return false
+
+        t.bones[0].set(pelvisMatrix)
+        if (!legMatrix(t.leftHip, t.leftKnee, t.leftAnkle, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE,
+                p, handedness, t.bones[1])) t.bones[1].set(pelvisMatrix)
+        if (!legMatrix(t.rightHip, t.rightKnee, t.rightAnkle, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE,
+                p, handedness, t.bones[2])) t.bones[2].set(pelvisMatrix)
+        for (k in 0 until TrouserMesh.BONES) t.bones[k].mapPoints(t.placed[k], t.mesh.source)
+
+        val w = t.mesh.weights
+        val pelvis = t.placed[0]
+        val l = t.placed[1]
+        val r = t.placed[2]
+        val out = t.vertices
+        for (v in 0 until t.mesh.vertexCount) {
+            val wp = w[v * 3]
+            val wl = w[v * 3 + 1]
+            val wr = w[v * 3 + 2]
+            val x = v * 2
+            out[x] = wp * pelvis[x] + wl * l[x] + wr * r[x]
+            out[x + 1] = wp * pelvis[x + 1] + wl * l[x + 1] + wr * r[x + 1]
+        }
+        canvas.drawBitmapMesh(t.front, t.mesh.cols, t.mesh.rows, out, 0, null, 0, garmentPaint)
+        return true
+    }
+
+    /** One leg's bone: hip to ankle, or hip to knee when the ankle is out of sight. */
+    private fun legMatrix(
+        hip: Anchor, knee: Anchor, ankle: Anchor, hipAt: Int, kneeAt: Int, ankleAt: Int,
+        p: FloatArray, handedness: Float, out: Matrix
+    ): Boolean = segmentMatrix(hip, ankle, hipAt, ankleAt, p, handedness, out, pelvisInverse) ||
+        segmentMatrix(hip, knee, hipAt, kneeAt, p, handedness, out, pelvisInverse)
+
+    /**
+     * Sets [pelvisMatrix] and [pelvisInverse] for a pair of trousers. Returns the transform's
+     * handedness, as [computeTorso] does, or 0 if it is unusable.
+     *
+     * Three points, as M3's torso has: the garment's hip anchors go onto the wearer's hips, and
+     * the point one garment leg length below the anchors' midpoint goes onto the point one of the
+     * wearer's leg lengths below the hips'. So the hips' spacing sets the scale across, the legs
+     * set it down, and the waistband and seat stay in proportion with the legs drawn below them.
+     * "Below" is square to the hip line, on the image's lower side.
+     *
+     * The wearer's leg length is the mean of the legs in sight: hip to ankle, or hip to knee
+     * scaled up by the garment's own leg-to-thigh proportion. With no leg in sight, the hips'
+     * spacing sets the scale both ways.
+     */
+    private fun computePelvis(p: FloatArray, t: TrouserRender): Float {
+        val lx = viewX(p, LEFT_HIP)
+        val ly = viewY(p, LEFT_HIP)
+        val rx = viewX(p, RIGHT_HIP)
+        val ry = viewY(p, RIGHT_HIP)
+        val span = hypot(rx - lx, ry - ly)
+        if (span < 1f || t.hipSpan < 1f) return 0f
+
+        var total = 0f
+        var legs = 0
+        for (side in 0..1) {
+            val hipAt = if (side == 0) LEFT_HIP else RIGHT_HIP
+            val kneeAt = if (side == 0) LEFT_KNEE else RIGHT_KNEE
+            val ankleAt = if (side == 0) LEFT_ANKLE else RIGHT_ANKLE
+            val hx = viewX(p, hipAt)
+            val hy = viewY(p, hipAt)
+            if (visible(p, ankleAt)) {
+                total += hypot(viewX(p, ankleAt) - hx, viewY(p, ankleAt) - hy)
+                legs++
+            } else if (visible(p, kneeAt)) {
+                total += hypot(viewX(p, kneeAt) - hx, viewY(p, kneeAt) - hy) * t.legPerThigh[side]
+                legs++
+            }
+        }
+        val length = if (legs > 0) total / legs else t.legLength * span / t.hipSpan
+
+        // Square to the hip line, (-dy, dx) / |d|, turned to point down the image.
+        val ax = t.rightHip.x - t.leftHip.x
+        val ay = t.rightHip.y - t.leftHip.y
+        val artDown = if (ax >= 0f) 1f else -1f
+        src[0] = t.leftHip.x; src[1] = t.leftHip.y
+        src[2] = t.rightHip.x; src[3] = t.rightHip.y
+        src[4] = (t.leftHip.x + t.rightHip.x) / 2f - artDown * ay / t.hipSpan * t.legLength
+        src[5] = (t.leftHip.y + t.rightHip.y) / 2f + artDown * ax / t.hipSpan * t.legLength
+
+        val viewDown = if (rx - lx >= 0f) 1f else -1f
+        dst[0] = lx; dst[1] = ly
+        dst[2] = rx; dst[3] = ry
+        dst[4] = (lx + rx) / 2f - viewDown * (ry - ly) / span * length
+        dst[5] = (ly + ry) / 2f + viewDown * (rx - lx) / span * length
+
+        if (!pelvisMatrix.setPolyToPoly(src, 0, dst, 0, 3)) return 0f
+        if (!pelvisMatrix.invert(pelvisInverse)) return 0f
+
+        pelvisMatrix.getValues(matrixValues)
+        val det = matrixValues[Matrix.MSCALE_X] * matrixValues[Matrix.MSCALE_Y] -
+            matrixValues[Matrix.MSKEW_X] * matrixValues[Matrix.MSKEW_Y]
+        return if (det >= 0f) 1f else -1f
     }
 
     /**
@@ -1049,7 +1237,9 @@ class OverlayView @JvmOverloads constructor(
 
     /**
      * Builds the transform for one limb, from its anchors [a0] -> [a1] on the artwork to its
-     * landmarks [from] -> [to] on the body. Returns false when either is not usable.
+     * landmarks [from] -> [to] on the body. Returns false when either is not usable. [parentInverse]
+     * is the inverse of the transform the limb hangs from: the torso's for a sleeve, the pelvis's
+     * for a trouser leg.
      *
      * Length follows the limb, width follows the body. Along the axis from pivot to far end, the
      * part stretches to the wearer's actual segment length. Across it, the part scales with the
@@ -1063,7 +1253,8 @@ class OverlayView @JvmOverloads constructor(
      * checked before reaching a phone. Change the two together.
      */
     private fun segmentMatrix(
-        a0: Anchor?, a1: Anchor?, from: Int, to: Int, p: FloatArray, handedness: Float, out: Matrix
+        a0: Anchor?, a1: Anchor?, from: Int, to: Int, p: FloatArray, handedness: Float, out: Matrix,
+        parentInverse: Matrix = torsoInverse
     ): Boolean {
         if (a0 == null || a1 == null) return false
         if (!visible(p, from) || !visible(p, to)) return false
@@ -1085,7 +1276,7 @@ class OverlayView @JvmOverloads constructor(
 
         vector[0] = dx
         vector[1] = dy
-        torsoInverse.mapVectors(vector)
+        parentInverse.mapVectors(vector)
         val inverseLength = hypot(vector[0], vector[1])
         if (inverseLength < 1e-6f) return false
         val widthScale = 1f / inverseLength

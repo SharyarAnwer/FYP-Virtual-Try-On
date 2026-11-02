@@ -116,14 +116,17 @@ data class Garment(
      * shows it because the shirt was shot on an invisible mannequin; on a person the neck fills
      * that opening, so it is cleared at load time and the wearer's own neck shows through.
      */
-    val neckOpening: List<Anchor> = emptyList()
+    val neckOpening: List<Anchor> = emptyList(),
+    /** Trousers: where the waistband, crotch and hems lie in the front photo (M4). */
+    val legs: Legs? = null
 ) {
     fun anchor(landmark: String?): Anchor? = landmark?.let { anchors[it] }
 }
 
 /**
  * Decoded artwork for one garment. Layered garments fill [fills], [outlines] and [seams],
- * index-aligned with [Garment.parts]; mesh garments fill [meshFront], [meshSleeves] and [mesh].
+ * index-aligned with [Garment.parts]; mesh shirts fill [meshFront], [meshSleeves] and [mesh];
+ * trousers fill [meshFront] and [trousers].
  */
 class GarmentLayers(
     val fills: List<Bitmap>,
@@ -131,7 +134,8 @@ class GarmentLayers(
     val seams: List<Bitmap?>,
     val meshFront: Bitmap? = null,
     val meshSleeves: Bitmap? = null,
-    val mesh: GarmentMesh? = null
+    val mesh: GarmentMesh? = null,
+    val trousers: TrouserMesh? = null
 )
 
 /**
@@ -193,6 +197,12 @@ object GarmentCatalog {
      * a garment missing a sleeve is worse than no garment. Callers should cache — this allocates.
      */
     fun loadLayers(context: Context, garment: Garment): GarmentLayers? {
+        if (garment.render == RenderKind.MESH && garment.legs != null) {
+            // Trousers: no neck opening to clear and no sleeves to draw again on top.
+            val photo = decode(context, garment.frontPath ?: return null) ?: return null
+            return GarmentLayers(emptyList(), emptyList(), emptyList(), meshFront = photo,
+                trousers = TrouserMesh(garment))
+        }
         if (garment.render == RenderKind.MESH) {
             val photo = decode(context, garment.frontPath ?: return null) ?: return null
             val front = clearNeckOpening(photo, garment.neckOpening)
@@ -265,6 +275,16 @@ object GarmentCatalog {
             }
         } ?: emptyMap()
 
+        val legs = json.optJSONObject("legs")?.let { l ->
+            val waist = json.getJSONObject("waist")
+            val left = l.getJSONObject("left")
+            val right = l.getJSONObject("right")
+            Legs(point(waist.getJSONObject("left")), point(waist.getJSONObject("right")),
+                point(json.getJSONObject("crotch")),
+                point(left.getJSONObject("hemOuter")), point(left.getJSONObject("hemInner")),
+                point(right.getJSONObject("hemOuter")), point(right.getJSONObject("hemInner")))
+        }
+
         val partsJson = json.optJSONArray("parts") ?: org.json.JSONArray()
         val parts = (0 until partsJson.length()).map { i ->
             val part = partsJson.getJSONObject(i)
@@ -322,7 +342,8 @@ object GarmentCatalog {
             armholes = armholes,
             neckOpening = json.optJSONArray("neckOpening")?.let { pts ->
                 (0 until pts.length()).map { point(pts.getJSONObject(it)) }
-            } ?: emptyList()
+            } ?: emptyList(),
+            legs = legs
         )
     } catch (e: Exception) {
         Log.e(TAG, "Skipping malformed garment entry", e)
@@ -407,11 +428,18 @@ object GarmentCatalog {
         var ok = true
         val fail = { reason: String -> reject(reason); ok = false }
 
-        listOf("left_elbow", "right_elbow").forEach { required ->
-            if (!garment.anchors.containsKey(required)) fail("mesh garment needs anchor '$required'")
-        }
-        listOf("left", "right").forEach { side ->
-            if (garment.armholes[side] == null) fail("mesh garment needs armhole '$side'")
+        if (garment.category == "lower_body") {
+            listOf("left_ankle", "right_ankle").forEach { required ->
+                if (!garment.anchors.containsKey(required)) fail("trousers need anchor '$required'")
+            }
+            if (garment.legs == null) fail("trousers need their waist, crotch and hems")
+        } else {
+            listOf("left_elbow", "right_elbow").forEach { required ->
+                if (!garment.anchors.containsKey(required)) fail("mesh garment needs anchor '$required'")
+            }
+            listOf("left", "right").forEach { side ->
+                if (garment.armholes[side] == null) fail("mesh garment needs armhole '$side'")
+            }
         }
         val front = garment.frontPath ?: run { fail("mesh garment has no front photo"); return false }
         if (garment.neckOpening.isNotEmpty() && garment.neckOpening.size < 3) {

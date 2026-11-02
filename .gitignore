@@ -19,3 +19,4 @@ local.properties
 __pycache__/
 /tools/garment_points_*.png
 /tools/mesh_preview_*.png
+/tools/trouser_preview_*.png

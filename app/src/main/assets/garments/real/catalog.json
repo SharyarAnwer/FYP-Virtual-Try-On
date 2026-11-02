@@ -1213,6 +1213,125 @@
           "y": 52.5
         }
       ]
+    },
+    {
+      "id": "khaki_chinos",
+      "name": "Khaki Chinos",
+      "category": "lower_body",
+      "render": "mesh",
+      "imageWidth": 427,
+      "imageHeight": 1024,
+      "front": "khaki_chinos_front.png",
+      "back": "khaki_chinos_back.png",
+      "anchors": {
+        "left_hip": {
+          "x": 128.0,
+          "y": 146.6
+        },
+        "left_knee": {
+          "x": 120.0,
+          "y": 544.2
+        },
+        "left_ankle": {
+          "x": 104.0,
+          "y": 941.9
+        },
+        "right_hip": {
+          "x": 303.0,
+          "y": 146.6
+        },
+        "right_knee": {
+          "x": 310.0,
+          "y": 545.4
+        },
+        "right_ankle": {
+          "x": 318.0,
+          "y": 944.3
+        }
+      },
+      "waist": {
+        "left": {
+          "x": 62.0,
+          "y": 41.0
+        },
+        "right": {
+          "x": 367.0,
+          "y": 42.0
+        }
+      },
+      "crotch": {
+        "x": 218.0,
+        "y": 318.0
+      },
+      "legs": {
+        "left": {
+          "hemOuter": {
+            "x": 44.0,
+            "y": 967.0
+          },
+          "hemInner": {
+            "x": 164.0,
+            "y": 966.0
+          }
+        },
+        "right": {
+          "hemOuter": {
+            "x": 383.0,
+            "y": 966.0
+          },
+          "hemInner": {
+            "x": 260.0,
+            "y": 972.0
+          }
+        }
+      },
+      "colour": {
+        "name": "khaki",
+        "hex": "#B18C5B"
+      },
+      "gender": "male",
+      "fitStyle": "regular",
+      "suitableBodyTypes": [
+        "slim",
+        "average",
+        "broad"
+      ],
+      "sizes": [
+        {
+          "label": "S",
+          "shoulderToTorsoRatio": {
+            "min": 0.58,
+            "max": 0.7
+          },
+          "heightRangeCm": {
+            "min": 150,
+            "max": 168
+          }
+        },
+        {
+          "label": "M",
+          "shoulderToTorsoRatio": {
+            "min": 0.68,
+            "max": 0.8
+          },
+          "heightRangeCm": {
+            "min": 165,
+            "max": 180
+          }
+        },
+        {
+          "label": "L",
+          "shoulderToTorsoRatio": {
+            "min": 0.78,
+            "max": 0.92
+          },
+          "heightRangeCm": {
+            "min": 177,
+            "max": 196
+          }
+        }
+      ],
+      "placeholder": false
     }
   ],
   "note": "Real garments, drawn by mesh warping. Written by tools/garment_points.py; anchors are derived from detected garment points, so re-run it after replacing a photo rather than editing anchors by hand."

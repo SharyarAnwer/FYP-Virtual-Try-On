@@ -3,9 +3,11 @@ Finds a garment photo's key points and writes its catalog entry.
 
     python tools/garment_points.py --id polo_pink --name "Pink Polo" [--gender unisex]
                                    [--fit regular] [--dir app/src/main/assets/garments/real]
+    python tools/garment_points.py --id khaki_chinos --name "Khaki Chinos" --category lower_body
 
 Reads <id>_front.png (and <id>_back.png if present) produced by prepare_garment.py, finds the
-shoulder tips, armpits, cuffs and hem from the silhouette, derives the body anchors from them,
+garment's key points from the silhouette - for a shirt the shoulder tips, armpits, cuffs and hem;
+for trousers the waistband corners, crotch and hem corners - derives the body anchors from them,
 and adds or replaces the garment in <dir>/catalog.json. It also writes
 tools/garment_points_<id>.png showing every point, which is the thing to check: detection is
 automatic, and a point in the wrong place looks exactly like a broken warp on the phone.
@@ -72,6 +74,21 @@ SIZE_BANDS = [
     {"label": "M", "shoulderToTorsoRatio": {"min": 0.68, "max": 0.80}, "heightRangeCm": {"min": 165, "max": 180}},
     {"label": "L", "shoulderToTorsoRatio": {"min": 0.78, "max": 0.92}, "heightRangeCm": {"min": 177, "max": 196}},
 ]
+
+# --- trousers (M4): anthropometric estimates, not yet measured on device -------------------
+# Heights as fractions of standing height for an adult man: a mid-rise waistband at about 0.57,
+# the hip joint 0.53, the crotch 0.465, the knee 0.285, the ankle bone 0.04, and a full-length
+# trouser hem 0.025.
+# Hip landmarks below the waistband's top edge, as a fraction of the rise (waistband to crotch):
+# (0.57 - 0.53) / (0.57 - 0.465).
+HIP_BELOW_WAIST = 0.38
+# Knee along the leg, as a fraction of hip to ankle: (0.53 - 0.285) / (0.53 - 0.04).
+KNEE_ALONG_LEG = 0.5
+# Ankle above the hem, as a fraction of hip to hem: (0.04 - 0.025) / (0.53 - 0.025).
+ANKLE_ABOVE_HEM = 0.03
+# The hip's x is each leg's centre this far below the crotch, as a fraction of the rise: where
+# the legs have parted but the thigh is still at its widest.
+THIGH_BELOW_CROTCH = 0.1
 
 
 def silhouette(path):
@@ -283,6 +300,112 @@ def derive_anchors(mask, left, right):
     return anchors, joint_width, armhole_top, neck
 
 
+def extreme(mask, dx, dy, where=None):
+    """The garment pixel farthest in the direction (dx, dy), among the pixels in `where` if given."""
+    ys, xs = np.nonzero(mask if where is None else mask & where)
+    i = int(np.argmax(dx * xs + dy * ys))
+    return float(xs[i]), float(ys[i])
+
+
+def background_runs(row):
+    """(first, last) x of each run of background lying between the row's outermost garment pixels."""
+    cols = np.where(row)[0]
+    if len(cols) == 0:
+        return []
+    runs, start = [], None
+    for x in range(int(cols[0]), int(cols[-1]) + 1):
+        if not row[x] and start is None:
+            start = x
+        elif row[x] and start is not None:
+            runs.append((start, x - 1))
+            start = None
+    return runs
+
+
+def crotch_apex(mask, centre):
+    """
+    The top of the gap between the legs: the gap is followed up from just above the hems, row by
+    row, to the last row in which it is still open. Followed rather than searched for, so a gap
+    elsewhere - between a belt loop and the waistband, say - is never taken for it.
+    """
+    h, _ = mask.shape
+    rows = np.where(mask.any(axis=1))[0]
+    gap, apex = None, None
+    for y in range(int(rows[-1] - 0.02 * h), int(rows[0]), -1):
+        runs = background_runs(mask[y])
+        if gap is not None:
+            runs = [r for r in runs if r[0] <= gap[1] and r[1] >= gap[0]]
+            if not runs:
+                break
+        if not runs:
+            continue
+        gap = min(runs, key=lambda r: abs((r[0] + r[1]) / 2 - centre))
+        apex = ((gap[0] + gap[1]) / 2, float(y))
+    if apex is None:
+        raise SystemExit("no gap between the legs found: do the legs touch in the photo?")
+    return apex
+
+
+def leg_centre(mask, y, crotch_x, side):
+    """
+    The x midway across one leg in row `y`, below the crotch: from the leg's outer edge to its
+    inner edge, the first background pixel walking inward from the outside.
+    """
+    row = mask[int(round(y))]
+    cols = np.where(row)[0]
+    cols = cols[cols < crotch_x] if side < 0 else cols[cols > crotch_x]
+    outer = int(cols.min() if side < 0 else cols.max())
+    x = outer
+    while row[x - side] and side * (x - side - crotch_x) > 0:
+        x -= side
+    return (outer + x) / 2
+
+
+def trouser_points(mask):
+    """
+    Waistband corners, crotch apex and each leg's hem corners, keyed by image side.
+
+    Corners are the garment's extreme pixels on a 45-degree diagonal - top-outer for the
+    waistband, bottom-outer and bottom-inner for each hem - which finds a corner whether the
+    waistband sits level or slightly tilted, as it does in the khaki chinos' back view.
+    """
+    h, w = mask.shape
+    xs = np.arange(w)[None, :]
+    waist = {"left": extreme(mask, -1, -1), "right": extreme(mask, 1, -1)}
+    crotch = crotch_apex(mask, (waist["left"][0] + waist["right"][0]) / 2)
+    hems = {}
+    for name, side in (("left", -1), ("right", 1)):
+        leg = np.broadcast_to(side * (xs - crotch[0]) > 0, mask.shape)
+        hems[name] = {"outer": extreme(mask, side, 1, leg), "inner": extreme(mask, -side, 1, leg)}
+    return {"waist": waist, "crotch": crotch, "hems": hems}
+
+
+def derive_leg_anchors(mask, points):
+    """
+    Hip, knee and ankle anchors for each leg, from the garment points and body proportions.
+
+    Every anchor sits on its leg's centre line. Heights: the hip a fixed fraction of the rise
+    below the waistband, the ankle just above the hem - trousers are bought to the wearer's leg
+    length, so the hem is taken to fall at the ankle - and the knee a fixed fraction of the way
+    between them. The hip's x is the leg's centre just below the crotch, the top of the thigh.
+    """
+    crotch_x, crotch_y = points["crotch"]
+    waist_y = (points["waist"]["left"][1] + points["waist"]["right"][1]) / 2
+    rise = crotch_y - waist_y
+    hip_y = waist_y + HIP_BELOW_WAIST * rise
+    thigh_y = crotch_y + THIGH_BELOW_CROTCH * rise
+    anchors = {}
+    for name, side in (("left", -1), ("right", 1)):
+        hem = points["hems"][name]
+        hem_y = (hem["outer"][1] + hem["inner"][1]) / 2
+        ankle_y = hem_y - ANKLE_ABOVE_HEM * (hem_y - hip_y)
+        knee_y = hip_y + KNEE_ALONG_LEG * (ankle_y - hip_y)
+        anchors[f"{name}_hip"] = (leg_centre(mask, thigh_y, crotch_x, side), hip_y)
+        anchors[f"{name}_knee"] = (leg_centre(mask, knee_y, crotch_x, side), knee_y)
+        anchors[f"{name}_ankle"] = (leg_centre(mask, ankle_y, crotch_x, side), ankle_y)
+    return anchors
+
+
 def dominant_colour(path):
     rgba = np.asarray(Image.open(path).convert("RGBA")).reshape(-1, 4)
     solid = rgba[rgba[:, 3] == 255][:, :3]
@@ -319,55 +442,37 @@ def preview(path, left, right, anchors, armhole_top, neck, out_path):
     board.convert("RGB").save(out_path)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--id", required=True)
-    ap.add_argument("--name", required=True)
-    ap.add_argument("--gender", default="unisex")
-    ap.add_argument("--fit", default="regular")
-    ap.add_argument("--body-types", default="slim,average,broad")
-    ap.add_argument("--neck", default=None,
-                    help='neck opening polygon on the front photo, "x,y x,y ..." in canvas px. '
-                         "Kept from the existing entry when omitted.")
-    ap.add_argument("--dir", default=os.path.join("app", "src", "main", "assets", "garments", "real"))
-    args = ap.parse_args()
+def preview_legs(path, points, anchors, out_path):
+    img = Image.open(path).convert("RGBA")
+    board = Image.new("RGBA", img.size, (238, 241, 243, 255))
+    board.alpha_composite(img)
+    d = ImageDraw.Draw(board)
 
-    front = os.path.join(args.dir, f"{args.id}_front.png")
-    back = os.path.join(args.dir, f"{args.id}_back.png")
-    mask = silhouette(front)
-    h, w = mask.shape
-    left_outline, right_outline = profiles(mask)
-    left = side_points(mask, left_outline, -1)
-    right = side_points(mask, right_outline, 1)
-    anchors, joint_width, armhole_top, neck = derive_anchors(mask, left, right)
+    def mark(p, colour, label, r=7):
+        x, y = p
+        d.ellipse([x - r, y - r, x + r, y + r], outline=colour, width=3)
+        d.line([x - r - 5, y, x + r + 5, y], fill=colour, width=2)
+        d.line([x, y - r - 5, x, y + r + 5], fill=colour, width=2)
+        d.text((x + r + 6, y - 7), label, fill=(20, 24, 28, 255))
 
-    r2 = lambda p: {"x": round(p[0], 1), "y": round(p[1], 1)}
-    entry = {
-        "id": args.id,
-        "name": args.name,
-        "category": "upper_body",
-        "render": "mesh",
-        "imageWidth": w,
-        "imageHeight": h,
-        "front": os.path.basename(front),
-        "back": os.path.basename(back) if os.path.exists(back) else None,
-        "anchors": {k: r2(v) for k, v in anchors.items()},
-        "armholes": {
-            side: {"shoulder": r2(armhole_top[side]), "armpit": r2(pts["armpit"]),
-                   "below": r2(pts["below"]),
-                   # The cuff hem's two ends: the sleeve's own centre line and width come from them.
-                   "cuffOuter": r2(pts["cuff_outer"]), "cuffInner": r2(pts["cuff_inner"])}
-            for side, pts in (("left", left), ("right", right))
-        },
-        "colour": {"name": args.name.split()[0].lower(), "hex": dominant_colour(front)},
-        "gender": args.gender,
-        "fitStyle": args.fit,
-        "suitableBodyTypes": args.body_types.split(","),
-        "sizes": SIZE_BANDS,
-        "placeholder": False,
-    }
+    garment = (255, 170, 0, 255)
+    body = (0, 150, 190, 255)
+    for name in ("left", "right"):
+        d.line([anchors[f"{name}_hip"], anchors[f"{name}_knee"], anchors[f"{name}_ankle"]],
+               fill=body, width=2)
+        mark(points["waist"][name], garment, "waist")
+        mark(points["hems"][name]["outer"], garment, "hem")
+        mark(points["hems"][name]["inner"], garment, "hem")
+    mark(points["crotch"], garment, "crotch")
+    for name, p in anchors.items():
+        mark(p, body, name.split("_")[1], r=9)
+    d.text((10, 8), "orange = garment points;  blue = body anchors", fill=(20, 24, 28, 255))
+    board.convert("RGB").save(out_path)
 
-    catalog_path = os.path.join(args.dir, "catalog.json")
+
+def write_catalog(directory, entry):
+    """Adds or replaces `entry` in <directory>/catalog.json. Returns the catalog's path."""
+    catalog_path = os.path.join(directory, "catalog.json")
     catalog = {"schemaVersion": 3, "garments": []}
     if os.path.exists(catalog_path):
         with open(catalog_path, encoding="utf-8") as handle:
@@ -376,20 +481,83 @@ def main():
     catalog["note"] = ("Real garments, drawn by mesh warping. Written by tools/garment_points.py; "
                        "anchors are derived from detected garment points, so re-run it after "
                        "replacing a photo rather than editing anchors by hand.")
+    catalog["garments"] = [g for g in catalog["garments"] if g["id"] != entry["id"]] + [entry]
+    with open(catalog_path, "w", encoding="utf-8") as handle:
+        json.dump(catalog, handle, indent=2)
+        handle.write("\n")
+    return catalog_path
+
+
+def previous_entry(directory, garment_id):
+    """The garment's current catalog entry, or {} if it has none yet."""
+    catalog_path = os.path.join(directory, "catalog.json")
+    if not os.path.exists(catalog_path):
+        return {}
+    with open(catalog_path, encoding="utf-8") as handle:
+        return next((g for g in json.load(handle)["garments"] if g["id"] == garment_id), {})
+
+
+def common_fields(args, front, back, mask, category):
+    """The catalog fields every garment has, whatever its category."""
+    h, w = mask.shape
+    return {
+        "id": args.id,
+        "name": args.name,
+        "category": category,
+        "render": "mesh",
+        "imageWidth": w,
+        "imageHeight": h,
+        "front": os.path.basename(front),
+        "back": os.path.basename(back) if os.path.exists(back) else None,
+    }
+
+
+def descriptive_fields(args, front):
+    """What M6 and M7 read: colour, gender, fit, body types and sizes."""
+    return {
+        "colour": {"name": args.name.split()[0].lower(), "hex": dominant_colour(front)},
+        "gender": args.gender,
+        "fitStyle": args.fit,
+        "suitableBodyTypes": args.body_types.split(","),
+        "sizes": SIZE_BANDS,
+        "placeholder": False,
+    }
+
+
+def r2(p):
+    return {"x": round(p[0], 1), "y": round(p[1], 1)}
+
+
+def upper_body(args, front, back, mask):
+    left_outline, right_outline = profiles(mask)
+    left = side_points(mask, left_outline, -1)
+    right = side_points(mask, right_outline, 1)
+    anchors, joint_width, armhole_top, neck = derive_anchors(mask, left, right)
+
+    entry = common_fields(args, front, back, mask, "upper_body")
+    entry.update({
+        "anchors": {k: r2(v) for k, v in anchors.items()},
+        "armholes": {
+            side: {"shoulder": r2(armhole_top[side]), "armpit": r2(pts["armpit"]),
+                   "below": r2(pts["below"]),
+                   # The cuff hem's two ends: the sleeve's own centre line and width come from them.
+                   "cuffOuter": r2(pts["cuff_outer"]), "cuffInner": r2(pts["cuff_inner"])}
+            for side, pts in (("left", left), ("right", right))
+        },
+    })
+    entry.update(descriptive_fields(args, front))
     # The neck opening is marked by hand, not detected, so a re-run must not lose it.
-    previous = next((g for g in catalog["garments"] if g["id"] == args.id), {})
+    previous = previous_entry(args.dir, args.id)
     if args.neck:
         entry["neckOpening"] = [{"x": float(x), "y": float(y)}
                                 for x, y in (pair.split(",") for pair in args.neck.split())]
     elif previous.get("neckOpening"):
         entry["neckOpening"] = previous["neckOpening"]
-    catalog["garments"] = [g for g in catalog["garments"] if g["id"] != args.id] + [entry]
-    with open(catalog_path, "w", encoding="utf-8") as handle:
-        json.dump(catalog, handle, indent=2)
-        handle.write("\n")
+    catalog_path = write_catalog(args.dir, entry)
 
     out = os.path.join("tools", f"garment_points_{args.id}.png")
     preview(front, left, right, anchors, armhole_top, neck, out)
+    h, w = mask.shape
     print(f"{args.id}: {w}x{h}, shoulder-joint width {joint_width:.0f} px")
     if neck:
         print(f"  shoulders placed from the neck points {tuple(round(v) for v in neck[0])} "
@@ -401,6 +569,62 @@ def main():
     for k, v in anchors.items():
         print(f"  anchor {k:15s} ({v[0]:.0f}, {v[1]:.0f})")
     print(f"wrote {catalog_path} and {out}")
+
+
+def lower_body(args, front, back, mask):
+    points = trouser_points(mask)
+    anchors = derive_leg_anchors(mask, points)
+
+    entry = common_fields(args, front, back, mask, "lower_body")
+    entry.update({
+        "anchors": {k: r2(v) for k, v in anchors.items()},
+        "waist": {side: r2(points["waist"][side]) for side in ("left", "right")},
+        "crotch": r2(points["crotch"]),
+        # Each leg's hem: its outer and inner corners. The leg's own centre line and width at the
+        # hem come from them, as a sleeve's do from its cuff.
+        "legs": {side: {"hemOuter": r2(points["hems"][side]["outer"]),
+                        "hemInner": r2(points["hems"][side]["inner"])}
+                 for side in ("left", "right")},
+    })
+    entry.update(descriptive_fields(args, front))
+    catalog_path = write_catalog(args.dir, entry)
+
+    out = os.path.join("tools", f"garment_points_{args.id}.png")
+    preview_legs(front, points, anchors, out)
+    h, w = mask.shape
+    rise = points["crotch"][1] - (points["waist"]["left"][1] + points["waist"]["right"][1]) / 2
+    print(f"{args.id}: {w}x{h}, rise (waistband to crotch) {rise:.0f} px")
+    for side in ("left", "right"):
+        print(f"  {side:5s} waist {points['waist'][side]}  hem outer {points['hems'][side]['outer']}"
+              f"  hem inner {points['hems'][side]['inner']}")
+    print(f"  crotch {points['crotch']}")
+    for k, v in anchors.items():
+        print(f"  anchor {k:15s} ({v[0]:.0f}, {v[1]:.0f})")
+    print(f"wrote {catalog_path} and {out}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--id", required=True)
+    ap.add_argument("--name", required=True)
+    ap.add_argument("--category", default="upper_body", choices=("upper_body", "lower_body"),
+                    help="upper_body for shirts, lower_body for trousers")
+    ap.add_argument("--gender", default="unisex")
+    ap.add_argument("--fit", default="regular")
+    ap.add_argument("--body-types", default="slim,average,broad")
+    ap.add_argument("--neck", default=None,
+                    help='neck opening polygon on the front photo, "x,y x,y ..." in canvas px. '
+                         "Kept from the existing entry when omitted. Shirts only.")
+    ap.add_argument("--dir", default=os.path.join("app", "src", "main", "assets", "garments", "real"))
+    args = ap.parse_args()
+
+    front = os.path.join(args.dir, f"{args.id}_front.png")
+    back = os.path.join(args.dir, f"{args.id}_back.png")
+    mask = silhouette(front)
+    if args.category == "lower_body":
+        lower_body(args, front, back, mask)
+    else:
+        upper_body(args, front, back, mask)
 
 
 if __name__ == "__main__":
