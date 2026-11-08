@@ -160,10 +160,14 @@ class MainActivity : AppCompatActivity() {
         binding.switchButton.setOnClickListener { toggleLens() }
         binding.delegateButton.setOnClickListener { toggleDelegate() }
         binding.maskButton.setOnClickListener { toggleMasks() }
-        binding.fitButton.setOnClickListener {
-            val modes = OverlayView.FitMode.values()
-            binding.overlayView.fitMode = modes[(binding.overlayView.fitMode.ordinal + 1) % modes.size]
-            updateFitButton()
+        val modes = OverlayView.FitMode.values()
+        binding.topFitButton.setOnClickListener {
+            binding.overlayView.topFitMode = modes[(binding.overlayView.topFitMode.ordinal + 1) % modes.size]
+            updateFitButtons()
+        }
+        binding.bottomFitButton.setOnClickListener {
+            binding.overlayView.bottomFitMode = modes[(binding.overlayView.bottomFitMode.ordinal + 1) % modes.size]
+            updateFitButtons()
         }
         binding.topButton.setOnClickListener {
             if (tops.isEmpty()) return@setOnClickListener
@@ -187,7 +191,7 @@ class MainActivity : AppCompatActivity() {
 
         updateDelegateButton()
         updateMaskButton()
-        updateFitButton()
+        updateFitButtons()
         updateGarmentButtons()
         updateSkeletonButton()
         renderStats(0.0, 0.0, 0, 0)
@@ -332,6 +336,7 @@ class MainActivity : AppCompatActivity() {
             poseTracked = !landmarks.isNullOrEmpty()
             binding.overlayView.setBodyWidths(widths)
             binding.overlayView.setArmWidths(if (widths != null) bodyWidth.lastArms else null)
+            binding.overlayView.setLegWidths(bodyWidth.lastLegs)
             binding.overlayView.setPose(landmarks, upright.width, upright.height)
         } catch (e: Exception) {
             Log.e(TAG, "Frame analysis failed", e)
@@ -372,10 +377,12 @@ class MainActivity : AppCompatActivity() {
         if (now - lastPerfLogAtMs < PERF_LOG_INTERVAL_MS) return
         lastPerfLogAtMs = now
         Log.i(TAG, String.format(Locale.US,
-            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s ease=%.2f pose=%s",
+            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s/%s ease=%.2f trousers=%.2f pose=%s",
             perf.fps, perf.latencyMs, perf.prepMs, perf.inferenceMs, perf.unpackMs, perf.measureMs,
             if (masksActive) "on" else "off", bodyWidth.measuredLevels, BodyWidthMeter.LEVELS.size,
-            binding.overlayView.fitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase, poseTracked))
+            binding.overlayView.topFitMode.name.lowercase(Locale.US),
+            binding.overlayView.bottomFitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase,
+            binding.overlayView.trouserEase, poseTracked))
     }
 
     /**
@@ -533,11 +540,17 @@ class MainActivity : AppCompatActivity() {
         loadDetector()
     }
 
-    private fun updateFitButton() {
-        binding.fitButton.setText(when (binding.overlayView.fitMode) {
-            OverlayView.FitMode.CHEST -> R.string.fit_chest
-            OverlayView.FitMode.ROWS -> R.string.fit_rows
-            OverlayView.FitMode.OFF -> R.string.fit_off
+    private fun updateFitButtons() {
+        binding.topFitButton.setText(when (binding.overlayView.topFitMode) {
+            OverlayView.FitMode.CHEST -> R.string.top_fit_chest
+            OverlayView.FitMode.ROWS -> R.string.top_fit_rows
+            OverlayView.FitMode.OFF -> R.string.top_fit_off
+        })
+        // Trousers fit "by the chest" means by the hips; see OverlayView.FitMode.CHEST.
+        binding.bottomFitButton.setText(when (binding.overlayView.bottomFitMode) {
+            OverlayView.FitMode.CHEST -> R.string.bottom_fit_hips
+            OverlayView.FitMode.ROWS -> R.string.bottom_fit_rows
+            OverlayView.FitMode.OFF -> R.string.bottom_fit_off
         })
     }
 

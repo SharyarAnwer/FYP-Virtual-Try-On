@@ -112,6 +112,10 @@ class BodyWidthMeter {
         private const val RIGHT_INDEX = 20
         private const val LEFT_HIP = 23
         private const val RIGHT_HIP = 24
+        private const val LEFT_KNEE = 25
+        private const val RIGHT_KNEE = 26
+        private const val LEFT_ANKLE = 27
+        private const val RIGHT_ANKLE = 28
         private const val MIN_VISIBILITY = 0.5f
 
         /** Per arm: shoulder, elbow, wrist, little-finger knuckle, index knuckle. */
@@ -137,6 +141,38 @@ class BodyWidthMeter {
             intArrayOf(LEFT_SHOULDER, LEFT_ELBOW, LEFT_WRIST, LEFT_PINKY, LEFT_INDEX),
             intArrayOf(RIGHT_SHOULDER, RIGHT_ELBOW, RIGHT_WRIST, RIGHT_PINKY, RIGHT_INDEX)
         )
+
+        /**
+         * Where along each leg its thickness is measured (M4): 0 at the hip, 1 at the knee, 2 at
+         * the ankle, each segment divided evenly. Clear of the crotch, where the legs join the
+         * body, and of the ankle, where the foot widens the mask.
+         */
+        val LEG_SAMPLES = floatArrayOf(0.4f, 0.7f, 1.0f, 1.3f, 1.6f, 1.85f)
+
+        /** Furthest a leg's edge can be from its centre line, as a fraction of hip-joint spacing. */
+        const val MAX_LEG_HALF = 1.0f
+
+        /**
+         * Half an arm's width, as a fraction of hip-joint spacing: [ARM_HALF_WIDTH] over the
+         * spacing of the hip joints to the shoulder joints, about 0.55 on the tester. A leg's
+         * outer walk stops this far short of an arm crossing it, as the torso's does.
+         */
+        const val ARM_HALF_PER_HIP = 0.22f
+
+        /**
+         * Leg snapshot layout per leg (left, then right), per sample: outer and inner
+         * half-thickness (away from and towards the other leg, as fractions of the mask's width,
+         * NaN if unknown); then the outer and inner edge points, x0, y0, x1, y1 (normalised image
+         * coordinates, NaN where not measured this frame).
+         */
+        const val LEG_SAMPLE_STRIDE = 6
+        val LEG_STRIDE = LEG_SAMPLES.size * LEG_SAMPLE_STRIDE
+
+        /** Per leg: hip, knee, ankle. */
+        private val LEGS = arrayOf(
+            intArrayOf(LEFT_HIP, LEFT_KNEE, LEFT_ANKLE),
+            intArrayOf(RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE)
+        )
     }
 
     /** Smoothed half-widths per level, in mask pixels; NaN when there is none. */
@@ -159,6 +195,20 @@ class BodyWidthMeter {
     var lastArms: FloatArray? = null
         private set
 
+    /** Smoothed leg half-thicknesses per leg per sample, outer and inner, in mask pixels. */
+    private val legOuter = Array(2) { FloatArray(LEG_SAMPLES.size) { Float.NaN } }
+    private val legInner = Array(2) { FloatArray(LEG_SAMPLES.size) { Float.NaN } }
+    private val legStale = Array(2) { IntArray(LEG_SAMPLES.size) }
+    private val legPoint = FloatArray(4)
+    private val otherPoint = FloatArray(4)
+
+    /**
+     * The legs' thickness from the last [measure], laid out as [LEG_STRIDE] describes, or null.
+     * Read on the analysis thread right after [measure], then handed to the overlay.
+     */
+    var lastLegs: FloatArray? = null
+        private set
+
     /** Number of lines with both sides measured in the last frame, for the on-screen stats. */
     @Volatile var measuredLevels = 0
         private set
@@ -173,16 +223,24 @@ class BodyWidthMeter {
         armInner.fill(Float.NaN)
         armStale.fill(0)
         lastArms = null
+        for (side in 0..1) {
+            legOuter[side].fill(Float.NaN)
+            legInner[side].fill(Float.NaN)
+            legStale[side].fill(0)
+        }
+        lastLegs = null
         measuredLevels = 0
     }
 
     /**
      * Measures one frame. [mask] holds one confidence per pixel, row by row, [width] x [height],
      * aligned with the image the landmarks came from. Returns a snapshot laid out as [STRIDE]
-     * describes, or null when the torso landmarks are not visible.
+     * describes, or null when the torso landmarks are not visible. The legs are measured into
+     * [lastLegs] first, whether or not the torso is in sight.
      */
     fun measure(mask: FloatBuffer, width: Int, height: Int, landmarks: List<NormalizedLandmark>): FloatArray? {
         if (landmarks.size <= RIGHT_HIP) return null
+        lastLegs = measureLegs(mask, width, height, landmarks)
         for (i in intArrayOf(LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP)) {
             if (landmarks[i].visibility().orElse(1f) < MIN_VISIBILITY) return null
         }
@@ -328,6 +386,109 @@ class BodyWidthMeter {
         return out
     }
 
+    /**
+     * Measures each leg's thickness, clothes included, for fitting trousers row by row
+     * (OverlayView.FitMode.ROWS): at [LEG_SAMPLES] along hip to knee to ankle, walks across the
+     * leg both ways from its centre line to the mask's edge, square to the thigh or the shin.
+     *
+     * Outer and inner halves are kept apart, as for the arms. The outer walk stops short of an
+     * arm crossing it - a hand hanging beside the thigh is not leg - and a sample whose walk
+     * reaches the arm is skipped. The inner walk goes no further than halfway to the other leg:
+     * legs standing together meet there, and the mask cannot tell where one ends, so a walk still
+     * on the mask at halfway is taken as that far. Each sample is smoothed and held on its own,
+     * since the fit follows the leg's thickness down its length.
+     */
+    private fun measureLegs(
+        mask: FloatBuffer, width: Int, height: Int, landmarks: List<NormalizedLandmark>
+    ): FloatArray? {
+        if (landmarks.size <= RIGHT_ANKLE) return null
+        if (landmarks[LEFT_HIP].visibility().orElse(1f) < MIN_VISIBILITY ||
+            landmarks[RIGHT_HIP].visibility().orElse(1f) < MIN_VISIBILITY) return null
+        val hipSpan = hypot((landmarks[RIGHT_HIP].x() - landmarks[LEFT_HIP].x()) * width,
+            (landmarks[RIGHT_HIP].y() - landmarks[LEFT_HIP].y()) * height)
+        if (hipSpan < 4f) return null
+        val maxHalf = MAX_LEG_HALF * hipSpan
+        val armHalf = ARM_HALF_PER_HIP * hipSpan
+        val out = FloatArray(2 * LEG_STRIDE) { Float.NaN }
+        for (side in 0..1) {
+            val other = 1 - side
+            for ((i, t) in LEG_SAMPLES.withIndex()) {
+                val p = side * LEG_STRIDE + i * LEG_SAMPLE_STRIDE
+                var outer = Float.NaN
+                var inner = Float.NaN
+                if (legAt(side, t, landmarks, width, height, legPoint)) {
+                    val sx = legPoint[0]
+                    val sy = legPoint[1]
+                    // Across the leg, pointing away from the other leg - or from its hip, if the
+                    // other leg is out of sight.
+                    val otherSeen = legAt(other, t, landmarks, width, height, otherPoint)
+                    val rx = if (otherSeen) otherPoint[0] else landmarks[LEGS[other][0]].x() * width
+                    val ry = if (otherSeen) otherPoint[1] else landmarks[LEGS[other][0]].y() * height
+                    var cx = -legPoint[3]
+                    var cy = legPoint[2]
+                    if ((rx - sx) * cx + (ry - sy) * cy > 0f) {
+                        cx = -cx
+                        cy = -cy
+                    }
+                    val toOther = -((rx - sx) * cx + (ry - sy) * cy)
+                    val outLimit = minOf(maxHalf, nearestArm(sx, sy, cx, cy, 1f, landmarks, width, height) - armHalf)
+                    val inLimit = if (otherSeen) toOther / 2f else maxHalf
+                    if (outLimit >= 1f && inLimit >= 1f) {
+                        outer = armWalk(mask, width, height, sx, sy, cx, cy, outLimit)
+                        inner = armWalk(mask, width, height, sx, sy, -cx, -cy, inLimit,
+                            atLimit = if (otherSeen) inLimit else Float.NaN)
+                    }
+                    if (!outer.isNaN() && !inner.isNaN()) {
+                        out[p + 2] = (sx + cx * outer) / width
+                        out[p + 3] = (sy + cy * outer) / height
+                        out[p + 4] = (sx - cx * inner) / width
+                        out[p + 5] = (sy - cy * inner) / height
+                    }
+                }
+                if (!outer.isNaN() && !inner.isNaN()) {
+                    legStale[side][i] = 0
+                    val o = legOuter[side][i]
+                    val n = legInner[side][i]
+                    legOuter[side][i] = if (o.isNaN()) outer else o + SMOOTHING * (outer - o)
+                    legInner[side][i] = if (n.isNaN()) inner else n + SMOOTHING * (inner - n)
+                } else if (++legStale[side][i] > HOLD_FRAMES) {
+                    legOuter[side][i] = Float.NaN
+                    legInner[side][i] = Float.NaN
+                }
+                out[p] = legOuter[side][i] / width
+                out[p + 1] = legInner[side][i] / width
+            }
+        }
+        return out
+    }
+
+    /**
+     * Writes into [out] the point [t] along leg [side] - 0 at the hip, 1 at the knee, 2 at the
+     * ankle - and the unit direction of the thigh or shin it lies on, in mask pixels. False when
+     * either end of that segment is out of sight.
+     */
+    private fun legAt(
+        side: Int, t: Float, landmarks: List<NormalizedLandmark>, width: Int, height: Int, out: FloatArray
+    ): Boolean {
+        val joints = LEGS[side]
+        val a = if (t <= 1f) joints[0] else joints[1]
+        val b = if (t <= 1f) joints[1] else joints[2]
+        val f = if (t <= 1f) t else t - 1f
+        if (landmarks[a].visibility().orElse(1f) < MIN_VISIBILITY ||
+            landmarks[b].visibility().orElse(1f) < MIN_VISIBILITY) return false
+        val ax = landmarks[a].x() * width
+        val ay = landmarks[a].y() * height
+        val dx = landmarks[b].x() * width - ax
+        val dy = landmarks[b].y() * height - ay
+        val length = hypot(dx, dy)
+        if (length < 4f) return false
+        out[0] = ax + f * dx
+        out[1] = ay + f * dy
+        out[2] = dx / length
+        out[3] = dy / length
+        return true
+    }
+
     private fun median(values: FloatArray, n: Int): Float {
         java.util.Arrays.sort(values, 0, n)
         return values[n / 2]
@@ -335,11 +496,12 @@ class BodyWidthMeter {
 
     /**
      * Distance from a point on the arm's centre line to the arm's edge along a direction, or NaN:
-     * the point is not on the mask, or the walk reached [limit] - the torso, or a hand against
-     * the arm - or the frame's edge first.
+     * the point is not on the mask, or the walk reached the frame's edge, or it reached [limit] -
+     * the torso, or a hand against the arm - which gives [atLimit] instead. Legs walk the same way.
      */
     private fun armWalk(
-        mask: FloatBuffer, width: Int, height: Int, x0: Float, y0: Float, dx: Float, dy: Float, limit: Float
+        mask: FloatBuffer, width: Int, height: Int, x0: Float, y0: Float, dx: Float, dy: Float, limit: Float,
+        atLimit: Float = Float.NaN
     ): Float {
         var s = 0f
         while (s < limit) {
@@ -349,7 +511,7 @@ class BodyWidthMeter {
             if (mask.get(y * width + x) < PERSON) return if (s >= 1f) s else Float.NaN
             s += 1f
         }
-        return Float.NaN
+        return atLimit
     }
 
     /**

@@ -10,7 +10,10 @@
     <string name="skeleton_off">Skeleton off</string>
     <string name="mask_on">Mask on</string>
     <string name="mask_off">Mask off</string>
-    <string name="fit_chest">Fit: chest</string>
-    <string name="fit_rows">Fit: rows</string>
-    <string name="fit_off">Fit: off</string>
+    <string name="top_fit_chest">Top fit: chest</string>
+    <string name="top_fit_rows">Top fit: rows</string>
+    <string name="top_fit_off">Top fit: off</string>
+    <string name="bottom_fit_hips">Bottom fit: hips</string>
+    <string name="bottom_fit_rows">Bottom fit: rows</string>
+    <string name="bottom_fit_off">Bottom fit: off</string>
 </resources>

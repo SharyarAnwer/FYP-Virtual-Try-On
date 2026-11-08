@@ -201,7 +201,7 @@ object GarmentCatalog {
             // Trousers: no neck opening to clear and no sleeves to draw again on top.
             val photo = decode(context, garment.frontPath ?: return null) ?: return null
             return GarmentLayers(emptyList(), emptyList(), emptyList(), meshFront = photo,
-                trousers = TrouserMesh(garment))
+                trousers = TrouserMesh(garment).also { it.measure(photo) })
         }
         if (garment.render == RenderKind.MESH) {
             val photo = decode(context, garment.frontPath ?: return null) ?: return null
