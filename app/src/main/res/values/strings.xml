@@ -16,4 +16,6 @@
     <string name="bottom_fit_hips">Bottom fit: hips</string>
     <string name="bottom_fit_rows">Bottom fit: rows</string>
     <string name="bottom_fit_off">Bottom fit: off</string>
+    <string name="glasses_off">Glasses off</string>
+    <string name="glasses_on">Glasses on</string>
 </resources>

@@ -27,6 +27,7 @@ class PerfMonitor(private val windowSize: Int = 30) {
     private val inferMsWindow = ArrayDeque<Double>()
     private val unpackMsWindow = ArrayDeque<Double>()
     private val measureMsWindow = ArrayDeque<Double>()
+    private val faceMsWindow = ArrayDeque<Double>()
     private var frameStartNs = 0L
 
     /** Frames per second over the recent window. */
@@ -59,6 +60,11 @@ class PerfMonitor(private val windowSize: Int = 30) {
     var measureMs: Double = 0.0
         private set
 
+    /** Mean time spent in Face Mesh, in ms; see [recordFace]. */
+    @Volatile
+    var faceMs: Double = 0.0
+        private set
+
     /** Total frames processed since the last reset. */
     @Volatile
     var frameCount: Long = 0L
@@ -87,6 +93,11 @@ class PerfMonitor(private val windowSize: Int = 30) {
     /** Time spent measuring the body on the mask. */
     fun recordMeasure(ms: Double) {
         measureMs = push(measureMsWindow, ms)
+    }
+
+    /** Time spent in Face Mesh, the second model, run only while glasses are worn (M5). */
+    fun recordFace(ms: Double) {
+        faceMs = push(faceMsWindow, ms)
     }
 
     /** Call once all per-frame work is done, before releasing the frame. */
@@ -120,6 +131,7 @@ class PerfMonitor(private val windowSize: Int = 30) {
         inferMsWindow.clear()
         unpackMsWindow.clear()
         measureMsWindow.clear()
+        faceMsWindow.clear()
         frameCount = 0L
         fps = 0.0
         latencyMs = 0.0
@@ -127,5 +139,6 @@ class PerfMonitor(private val windowSize: Int = 30) {
         inferenceMs = 0.0
         unpackMs = 0.0
         measureMs = 0.0
+        faceMs = 0.0
     }
 }

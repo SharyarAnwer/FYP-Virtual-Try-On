@@ -584,6 +584,17 @@ class OverlayView @JvmOverloads constructor(
         armWidths = snapshot
     }
 
+    /** Latest Face Mesh points from [FaceTracker], or null: no glasses worn, or no face found. */
+    @Volatile private var face: FloatArray? = null
+
+    /** The glasses drawn on [face] (M5). UI thread only. */
+    private val glasses = Glasses3D()
+
+    /** Publishes Face Mesh points for the glasses; the next [setPose] triggers the redraw. */
+    fun setFace(points: FloatArray?) {
+        face = points
+    }
+
     /** Latest leg-thickness snapshot from [BodyWidthMeter.lastLegs], or null. */
     @Volatile private var legWidths: FloatArray? = null
 
@@ -660,6 +671,7 @@ class OverlayView @JvmOverloads constructor(
         val snapshot = pose
         if (snapshot == null || imageWidth <= 0 || imageHeight <= 0) {
             drawGuide(canvas)
+            drawGlasses(canvas)
             return
         }
 
@@ -672,6 +684,7 @@ class OverlayView @JvmOverloads constructor(
         val wearingTop = top?.let { drawGarment(canvas, snapshot, it) } ?: false
         val wearingGarment = wearingBottom || wearingTop
         canvas.restoreToCount(checkpoint)
+        drawGlasses(canvas)
         if (showSkeleton) {
             drawSkeleton(canvas, snapshot, dimmed = wearingGarment)
             if (faceSeen) canvas.drawPath(facePath, bonePaint)
@@ -679,6 +692,20 @@ class OverlayView @JvmOverloads constructor(
             armWidths?.let { drawArmWidths(canvas, it) }
             legWidths?.let { drawLegWidths(canvas, it) }
         }
+    }
+
+    /**
+     * Draws the glasses on the face Face Mesh last found, over every garment: they sit on the face,
+     * which the garments are clipped out of. With no face, the glasses' smoothing starts afresh.
+     */
+    private fun drawGlasses(canvas: Canvas) {
+        val f = face
+        if (f == null || imageWidth <= 0 || imageHeight <= 0) {
+            glasses.reset()
+            return
+        }
+        computeMapping()
+        glasses.draw(canvas, f, imageWidth, imageHeight, mapping[0], mapping[1], mapping[2])
     }
 
     /**

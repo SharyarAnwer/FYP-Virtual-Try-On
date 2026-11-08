@@ -76,6 +76,12 @@ class MainActivity : AppCompatActivity() {
 
     /** Touched only on [analysisExecutor], which is single-threaded, so access is serialised. */
     private var poseDetector: PoseDetector? = null
+
+    /** Face Mesh, created the first time glasses are worn. Analysis thread only. */
+    private var faceTracker: FaceTracker? = null
+
+    /** Whether glasses are worn (M5): Face Mesh runs only then. */
+    @Volatile private var glassesOn = false
     private var sourceBitmap: Bitmap? = null
     private var uprightBitmap: Bitmap? = null
     private var uprightCanvas: Canvas? = null
@@ -188,6 +194,10 @@ class MainActivity : AppCompatActivity() {
         // A tap on the picture hides the stats and every button, for a clear look at the garments,
         // and the next tap brings them back. The buttons sit above the overlay, so a tap on one
         // still reaches it; hidden ones take no taps.
+        binding.glassesButton.setOnClickListener {
+            glassesOn = !glassesOn
+            updateGlassesButton()
+        }
         binding.overlayView.setOnClickListener {
             binding.topBar.visibility =
                 if (binding.topBar.visibility == View.VISIBLE) View.INVISIBLE else View.VISIBLE
@@ -200,6 +210,7 @@ class MainActivity : AppCompatActivity() {
         updateMaskButton()
         updateFitButtons()
         updateGarmentButtons()
+        updateGlassesButton()
         updateSkeletonButton()
         renderStats(0.0, 0.0, 0, 0)
         loadGarments()
@@ -344,6 +355,7 @@ class MainActivity : AppCompatActivity() {
             binding.overlayView.setBodyWidths(widths)
             binding.overlayView.setArmWidths(if (widths != null) bodyWidth.lastArms else null)
             binding.overlayView.setLegWidths(bodyWidth.lastLegs)
+            binding.overlayView.setFace(if (glassesOn) trackFace(upright) else null)
             binding.overlayView.setPose(landmarks, upright.width, upright.height)
         } catch (e: Exception) {
             Log.e(TAG, "Frame analysis failed", e)
@@ -384,12 +396,12 @@ class MainActivity : AppCompatActivity() {
         if (now - lastPerfLogAtMs < PERF_LOG_INTERVAL_MS) return
         lastPerfLogAtMs = now
         Log.i(TAG, String.format(Locale.US,
-            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s/%s ease=%.2f trousers=%.2f pose=%s",
+            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s/%s ease=%.2f trousers=%.2f face=%.1f pose=%s",
             perf.fps, perf.latencyMs, perf.prepMs, perf.inferenceMs, perf.unpackMs, perf.measureMs,
             if (masksActive) "on" else "off", bodyWidth.measuredLevels, BodyWidthMeter.LEVELS.size,
             binding.overlayView.topFitMode.name.lowercase(Locale.US),
             binding.overlayView.bottomFitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase,
-            binding.overlayView.trouserEase, poseTracked))
+            binding.overlayView.trouserEase, if (glassesOn) perf.faceMs else Double.NaN, poseTracked))
     }
 
     /**
@@ -511,6 +523,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Finds the face for the glasses, creating Face Mesh the first time they are worn. Timed apart
+     * from the pose model: it is a second model on every frame, and its cost against the pose
+     * model's eye points is a result for the evaluation chapter (M5). Analysis thread only.
+     */
+    private fun trackFace(upright: Bitmap): FloatArray? {
+        val tracker = faceTracker ?: try {
+            FaceTracker.create(this).also { faceTracker = it }
+        } catch (e: Exception) {
+            Log.e(TAG, "Face Mesh failed to load; glasses switched off", e)
+            glassesOn = false
+            runOnUiThread { updateGlassesButton() }
+            return null
+        }
+        val startNs = System.nanoTime()
+        val points = tracker.detect(upright, SystemClock.uptimeMillis())
+        perf.recordFace((System.nanoTime() - startNs) / 1_000_000.0)
+        return points
+    }
+
+    private fun updateGlassesButton() {
+        binding.glassesButton.setText(if (glassesOn) R.string.glasses_on else R.string.glasses_off)
+    }
+
     private fun updateSkeletonButton() {
         binding.skeletonButton.setText(
             if (binding.overlayView.showSkeleton) R.string.skeleton_on else R.string.skeleton_off
@@ -585,20 +621,24 @@ class MainActivity : AppCompatActivity() {
         val unpack = if (masksActive) String.format(Locale.US, "%8.1f ms", perf.unpackMs) else "     off"
         val measure = if (masksActive) String.format(Locale.US, "%8.1f ms", perf.measureMs) else "     off"
         val width = if (masksActive) "${bodyWidth.measuredLevels}/${BodyWidthMeter.LEVELS.size}" else "off"
+        val face = if (glassesOn) String.format(Locale.US, "%8.1f ms", perf.faceMs) else "     off"
         binding.statsText.text = String.format(
             Locale.US,
             "FPS      %8.1f\nLATENCY  %8.1f ms\n  prep   %8.1f ms\n  infer  %8.1f ms\n" +
-                "  unpack%s\n  measure%s\n" +
+                "  unpack%s\n  measure%s\n  face  %s\n" +
                 "FRAME    %8s\nCAMERA   %8s\nAE LOCK  %8s\nMODEL    %8s\n" +
                 "DELEGATE %8s\nPOSE     %8s\nWIDTH    %8s\nGARMENTS %8d",
-            fps, latencyMs, perf.prepMs, perf.inferenceMs, unpack, measure,
+            fps, latencyMs, perf.prepMs, perf.inferenceMs, unpack, measure, face,
             resolution, lens, aeRange, "lite", activeDelegate, tracking, width, garmentCount
         )
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        analysisExecutor.execute { poseDetector?.close() }
+        analysisExecutor.execute {
+            poseDetector?.close()
+            faceTracker?.close()
+        }
         analysisExecutor.shutdown()
     }
 }
