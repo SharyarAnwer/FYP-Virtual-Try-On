@@ -185,6 +185,13 @@ class MainActivity : AppCompatActivity() {
             binding.overlayView.showSkeleton = !binding.overlayView.showSkeleton
             updateSkeletonButton()
         }
+        // A tap on the picture hides the stats and every button, for a clear look at the garments,
+        // and the next tap brings them back. The buttons sit above the overlay, so a tap on one
+        // still reaches it; hidden ones take no taps.
+        binding.overlayView.setOnClickListener {
+            binding.topBar.visibility =
+                if (binding.topBar.visibility == View.VISIBLE) View.INVISIBLE else View.VISIBLE
+        }
         binding.grantButton.setOnClickListener {
             cameraPermissionRequest.launch(Manifest.permission.CAMERA)
         }
