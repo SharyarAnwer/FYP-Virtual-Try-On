@@ -25,21 +25,24 @@ data class Legs(
 /**
  * The deformable grid a pair of trousers is drawn through (M4).
  *
- * The same grid as [GarmentMesh], with three bones: the pelvis, which carries the waistband, and
- * one per leg, from hip to ankle. Every vertex's weights come from its height and its side:
+ * The same grid as [GarmentMesh], with five bones: the pelvis, which carries the waistband, and
+ * per leg a thigh, hip to knee, and a shin, knee to ankle. Every vertex's weights come from its
+ * height and its side:
  * - Above the hip anchors it follows the pelvis, and from [LEGS_BELOW_CROTCH] below the crotch
  *   down, its leg. In between it blends, so the seat and the top of each thigh turn partly with a
  *   leg that swings out, as cloth there does.
  * - Left of the crotch it belongs to the left leg, right of it to the right leg, blended across
  *   [SPLIT] either side, so the fabric where the legs meet is not torn between them.
+ * - Down each leg, above the knee it follows the thigh and below it the shin, blended across
+ *   [KNEE_BLEND] either side, so a bent knee curves the fabric rather than creasing or parting it.
  *
  * Mirrors leg_weights() in tools/preview_trousers.py. Change them together.
  */
 class TrouserMesh(garment: Garment) {
 
     companion object {
-        /** Pelvis, left leg, right leg. */
-        const val BONES = 3
+        /** Pelvis, left thigh, left shin, right thigh, right shin. */
+        const val BONES = 5
 
         /**
          * How far below the crotch the legs take over completely, as a fraction of the rise
@@ -50,6 +53,13 @@ class TrouserMesh(garment: Garment) {
 
         /** Half-width of the blend between the legs, as a fraction of the hip anchors' spacing. */
         const val SPLIT = 0.05f
+
+        /**
+         * Half-width of the blend between thigh and shin either side of the knee anchor, as a
+         * fraction of that leg's length, hip to ankle. Narrower, the inside of a bent knee folds
+         * over itself; wider, the knee bends like rubber.
+         */
+        const val KNEE_BLEND = 0.08f
     }
 
     /** Cell size actually used, in artwork px. */
@@ -62,7 +72,7 @@ class TrouserMesh(garment: Garment) {
      *  Canvas.drawBitmapMesh requires. */
     val source = FloatArray(vertexCount * 2)
 
-    /** Per vertex: pelvis, left leg, right leg. Always sums to 1. */
+    /** Per vertex: pelvis, left thigh, left shin, right thigh, right shin. Always sums to 1. */
     val weights = FloatArray(vertexCount * BONES)
 
     /** The garment's centre line, x: midway between the hip anchors. */
@@ -119,6 +129,10 @@ class TrouserMesh(garment: Garment) {
         val waistY = (legs.leftWaist.y + legs.rightWaist.y) / 2f
         val legsFull = legs.crotch.y + LEGS_BELOW_CROTCH * (legs.crotch.y - waistY)
         val band = SPLIT * (hips[1].x - hips[0].x)
+        val kneeBand = FloatArray(2) { s ->
+            KNEE_BLEND * kotlin.math.hypot(ankles[s].x - hips[s].x, ankles[s].y - hips[s].y)
+        }
+        val shin = FloatArray(2)
         centreX = (hips[0].x + hips[1].x) / 2f
         crotchY = legs.crotch.y
         hipRow = (hipY / garment.imageHeight * rows).roundToInt().coerceIn(0, rows)
@@ -127,14 +141,18 @@ class TrouserMesh(garment: Garment) {
         for (r in 0..rows) {
             val y = r * garment.imageHeight.toFloat() / rows
             val leg = GarmentMesh.smoothstep(hipY, legsFull, y)
+            for (s in 0..1) shin[s] = GarmentMesh.smoothstep(knees[s].y - kneeBand[s], knees[s].y + kneeBand[s], y)
             for (c in 0..cols) {
                 val x = c * garment.imageWidth.toFloat() / cols
                 source[v * 2] = x
                 source[v * 2 + 1] = y
                 val left = GarmentMesh.smoothstep(legs.crotch.x + band, legs.crotch.x - band, x)
                 weights[v * BONES] = 1f - leg
-                weights[v * BONES + 1] = leg * left
-                weights[v * BONES + 2] = leg * (1f - left)
+                for (s in 0..1) {
+                    val side = leg * (if (s == 0) left else 1f - left)
+                    weights[v * BONES + 1 + 2 * s] = side * (1f - shin[s])
+                    weights[v * BONES + 2 + 2 * s] = side * shin[s]
+                }
                 v++
             }
             for (s in 0..1) {

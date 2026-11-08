@@ -12,15 +12,17 @@ The two implementations must change together.
 
 How the warp works
 ------------------
-Three bones. The pelvis carries the waistband: it maps the garment's hip anchors onto the
+Five bones. The pelvis carries the waistband: it maps the garment's hip anchors onto the
 wearer's hips, and a point one leg length below their midpoint onto the point one of the wearer's
 leg lengths below theirs, so the hips' spacing sets its scale across and the wearer's legs set it
-down. Each leg swings from its hip to its ankle, as long as the wearer's leg and as wide as the
-pelvis is across it (preview_garments.segment_matrix, as for a shirt's sleeves).
+down. Leg lengths run hip to knee to ankle, so bending the knees does not squash the seat. Each
+leg has a thigh, hip to knee, and a shin, knee to ankle, each as long as the wearer's and as wide
+as the pelvis is across it (preview_garments.segment_matrix, as for a shirt's sleeves).
 
 Every grid vertex follows the pelvis above the hip anchors and its leg from a little below the
 crotch down, blending in between; left of the crotch it is the left leg's, right of it the
-right's, blended across a narrow band where the legs meet.
+right's, blended across a narrow band where the legs meet; and down each leg, the thigh above the
+knee and the shin below, blended across a band at the knee.
 
 How the fit works
 -----------------
@@ -52,6 +54,7 @@ REAL = shirt.REAL
 # TrouserMesh. Change together.
 LEGS_BELOW_CROTCH = 0.1  # legs take over fully this far below the crotch, x the rise
 SPLIT = 0.05             # half-width of the blend between the legs, x the hip anchors' spacing
+KNEE_BLEND = 0.08        # half-width of the thigh/shin blend at the knee, x that leg's hip-to-ankle
 
 # OverlayView.fitTrousers and BodyWidthMeter. Change together.
 FIT_ALLOWANCE = shirt.FIT_ALLOWANCE
@@ -72,10 +75,16 @@ STANDIN_LEG_HALF = ([0.4, 1.0, 1.85], [0.5, 0.42, 0.33])
 LEG_PER_SHOULDER_WIDTH = 2.45
 CANVAS = (1080, 1700)
 
-# (label, fit mode, each leg's angle out from straight down in degrees)
-POSES = [("fit off, standing", "off", 2, 2), ("hips, standing", "hips", 2, 2),
-         ("hips, feet apart", "hips", 10, 10), ("hips, left leg out 25°", "hips", 25, 2),
-         ("rows, standing", "rows", 2, 2)]
+# (label, fit mode, left leg, right leg); each leg is (thigh angle, shin angle, thigh length):
+# angles in degrees out from straight down, and the length shortens a thigh turned towards the
+# camera, as in a squat.
+STRAIGHT = (2, 2, 1.0)
+POSES = [("rows, standing", "rows", STRAIGHT, STRAIGHT),
+         ("rows, feet apart", "rows", (10, 10, 1.0), (10, 10, 1.0)),
+         ("rows, left knee out", "rows", (35, -8, 1.0), STRAIGHT),
+         ("rows, slight squat", "rows", (30, -12, 0.8), (30, -12, 0.8)),
+         ("rows, step", "rows", (18, 4, 1.0), (-4, 6, 1.0)),
+         ("hips, left knee out", "hips", (35, -8, 1.0), STRAIGHT)]
 
 
 def pt(p):
@@ -83,7 +92,7 @@ def pt(p):
 
 
 def leg_weights(entry, points):
-    """(n, 3) weights for pelvis, left leg, right leg (TrouserMesh)."""
+    """(n, 5) weights for pelvis, left thigh, left shin, right thigh, right shin (TrouserMesh)."""
     a = entry["anchors"]
     hip_y = (a["left_hip"]["y"] + a["right_hip"]["y"]) / 2
     waist_y = (entry["waist"]["left"]["y"] + entry["waist"]["right"]["y"]) / 2
@@ -91,7 +100,14 @@ def leg_weights(entry, points):
     legs = shirt.smoothstep(hip_y, crotch["y"] + LEGS_BELOW_CROTCH * (crotch["y"] - waist_y), points[:, 1])
     band = SPLIT * (a["right_hip"]["x"] - a["left_hip"]["x"])
     left = shirt.smoothstep(crotch["x"] + band, crotch["x"] - band, points[:, 0])
-    return np.stack([1 - legs, legs * left, legs * (1 - left)], axis=1)
+    columns = [1 - legs]
+    for s, name in enumerate(("left", "right")):
+        side = legs * (left if s == 0 else 1 - left)
+        knee_band = KNEE_BLEND * np.linalg.norm(pt(a[f"{name}_ankle"]) - pt(a[f"{name}_hip"]))
+        knee_y = a[f"{name}_knee"]["y"]
+        shin = shirt.smoothstep(knee_y - knee_band, knee_y + knee_band, points[:, 1])
+        columns += [side * (1 - shin), side * shin]
+    return np.stack(columns, axis=1)
 
 
 def trouser_mesh(entry, texture):
@@ -168,16 +184,16 @@ def widen(m, outer, inner):
     return out
 
 
-def body(left_deg, right_deg):
-    """preview_mesh's stand-in body, arms at rest, with straight legs at the given angles."""
+def body(left, right):
+    """preview_mesh's stand-in body, arms at rest, with each leg posed as POSES describes."""
     view = shirt.body(8, 8)
-    length = LEG_PER_SHOULDER_WIDTH * shirt.SHOULDER_WIDTH
-    for side, sign, deg in (("left", -1, left_deg), ("right", 1, right_deg)):
-        r = math.radians(deg)
+    half = LEG_PER_SHOULDER_WIDTH * shirt.SHOULDER_WIDTH / 2
+    for side, sign, (thigh_deg, shin_deg, thigh_len) in (("left", -1, left), ("right", 1, right)):
+        t, s = math.radians(thigh_deg), math.radians(shin_deg)
         hx, hy = view[f"{side}_hip"]
-        ax, ay = hx + sign * length * math.sin(r), hy + length * math.cos(r)
-        view[f"{side}_ankle"] = (ax, ay)
-        view[f"{side}_knee"] = ((hx + ax) / 2, (hy + ay) / 2)
+        kx, ky = hx + sign * half * thigh_len * math.sin(t), hy + half * thigh_len * math.cos(t)
+        view[f"{side}_knee"] = (kx, ky)
+        view[f"{side}_ankle"] = (kx + sign * half * math.sin(s), ky + half * math.cos(s))
     for name in list(view):
         view[name] = (view[name][0], view[name][1] - 120)   # make room below for the feet
     return view
@@ -190,14 +206,21 @@ def down(a, b):
     return n if n[1] >= 0 else -n
 
 
+def leg_path(hip, knee, ankle):
+    """Hip to knee to ankle, along the leg."""
+    hip, knee, ankle = (np.array(p, float) for p in (hip, knee, ankle))
+    return np.linalg.norm(knee - hip) + np.linalg.norm(ankle - knee)
+
+
 def pelvis(entry, view):
     """The pelvis bone and its handedness (OverlayView.computePelvis)."""
     a = entry["anchors"]
     g_l, g_r = pt(a["left_hip"]), pt(a["right_hip"])
-    g_len = (np.linalg.norm(pt(a["left_ankle"]) - g_l) + np.linalg.norm(pt(a["right_ankle"]) - g_r)) / 2
+    g_len = sum(leg_path(pt(a[f"{s}_hip"]), pt(a[f"{s}_knee"]), pt(a[f"{s}_ankle"]))
+                for s in ("left", "right")) / 2
     v_l, v_r = np.array(view["left_hip"], float), np.array(view["right_hip"], float)
-    v_len = (np.linalg.norm(np.array(view["left_ankle"]) - v_l) +
-             np.linalg.norm(np.array(view["right_ankle"]) - v_r)) / 2
+    v_len = sum(leg_path(view[f"{s}_hip"], view[f"{s}_knee"], view[f"{s}_ankle"])
+                for s in ("left", "right")) / 2
     src = [tuple(g_l), tuple(g_r), tuple((g_l + g_r) / 2 + down(g_l, g_r) * g_len)]
     dst = [tuple(v_l), tuple(v_r), tuple((v_l + v_r) / 2 + down(v_l, v_r) * v_len)]
     m = affine_from_points(src, dst)
@@ -206,13 +229,16 @@ def pelvis(entry, view):
 
 
 def bones(entry, view):
+    """Pelvis, left thigh, left shin, right thigh, right shin (OverlayView.legBones)."""
     a = entry["anchors"]
     m, handedness = pelvis(entry, view)
     out = [m]
     for side in ("left", "right"):
-        leg = segment_matrix(tuple(pt(a[f"{side}_hip"])), tuple(pt(a[f"{side}_ankle"])),
-                             view[f"{side}_hip"], view[f"{side}_ankle"], m, handedness)
-        out.append(leg if leg is not None else m)
+        hip, knee, ankle = (tuple(pt(a[f"{side}_{j}"])) for j in ("hip", "knee", "ankle"))
+        thigh = segment_matrix(hip, knee, view[f"{side}_hip"], view[f"{side}_knee"], m, handedness)
+        thigh = thigh if thigh is not None else m
+        shin = segment_matrix(knee, ankle, view[f"{side}_knee"], view[f"{side}_ankle"], m, handedness)
+        out += [thigh, shin if shin is not None else thigh]
     return out
 
 
@@ -241,15 +267,18 @@ def fit(entry, m, view, mats, mode):
 
     a = entry["anchors"]
     for s, name in enumerate(("left", "right")):
-        d = pt(a[f"{name}_ankle"]) - pt(a[f"{name}_hip"])
-        ux, uy = -d[1] / np.linalg.norm(d), d[0] / np.linalg.norm(d)
-        leg = mats[s + 1]
-        leg_scale = math.hypot(leg[0][0] * ux + leg[0][1] * uy, leg[1][0] * ux + leg[1][1] * uy)
+        scales = []
+        for k, (j0, j1) in enumerate((("hip", "knee"), ("knee", "ankle"))):
+            d = pt(a[f"{name}_{j1}"]) - pt(a[f"{name}_{j0}"])
+            ux, uy = -d[1] / np.linalg.norm(d), d[0] / np.linalg.norm(d)
+            bone = mats[1 + 2 * s + k]
+            scales.append(math.hypot(bone[0][0] * ux + bone[0][1] * uy, bone[1][0] * ux + bone[1][1] * uy))
         for r in range(rows + 1):
             g = m["half"][s][r]
             seat = hip_ease[s] if g < 1 else ease(hip_half, allowance, g, row_scale)
             lr = max(r, m["first"][s])
             body_leg = float(np.interp(m["t"][s][lr], *STANDIN_LEG_HALF)) * spacing
+            leg_scale = scales[0 if m["t"][s][lr] < 1 else 1]
             o = m["outer"][s][lr]
             i = m["inner"][s][lr]
             leg_out = hip_ease[s] if o < 1 else ease(body_leg, allowance, o, leg_scale)
@@ -260,8 +289,8 @@ def fit(entry, m, view, mats, mode):
     return outer, inner
 
 
-def render(entry, texture, m, mode, left_deg, right_deg, top=None):
-    view = body(left_deg, right_deg)
+def render(entry, texture, m, mode, left, right, top=None):
+    view = body(left, right)
     mats = bones(entry, view)
     outer, inner = fit(entry, m, view, mats, mode)
     dst = shirt.skin(widen(m, outer, inner), leg_weights(entry, m["src"]), mats)
@@ -292,16 +321,17 @@ def render(entry, texture, m, mode, left_deg, right_deg, top=None):
 
 
 def weights_image(entry, texture):
-    """The photo tinted by weight: red = left leg, blue = right leg, grey = pelvis."""
+    """The photo tinted by weight: red/orange = left thigh/shin, blue/cyan = right, grey = pelvis."""
     w, h = texture.size
     ys, xs = np.mgrid[0:h, 0:w]
     pts = np.stack([xs.ravel() + 0.5, ys.ravel() + 0.5], axis=1)
-    wt = leg_weights(entry, pts).reshape(h, w, 3)
+    wt = leg_weights(entry, pts).reshape(h, w, 5)
     base = np.asarray(checkerboard(w, h).convert("RGB"), np.float32)
     tex = np.asarray(texture, np.float32)
     alpha = tex[..., 3:4] / 255
     grey = tex[..., :3].mean(axis=2, keepdims=True).repeat(3, axis=2)
-    tint = (wt[..., 0:1] * grey + wt[..., 1:2] * np.array([235, 70, 60]) + wt[..., 2:3] * np.array([60, 110, 235]))
+    tint = (wt[..., 0:1] * grey + wt[..., 1:2] * np.array([235, 70, 60]) + wt[..., 2:3] * np.array([245, 170, 50])
+            + wt[..., 3:4] * np.array([60, 110, 235]) + wt[..., 4:5] * np.array([60, 200, 225]))
     out = tint * alpha + base * (1 - alpha)
     return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8))
 
@@ -323,11 +353,11 @@ def main():
             continue
         texture = Image.open(os.path.join(REAL, entry["front"])).convert("RGBA")
         m = trouser_mesh(entry, texture)
-        tiles = [("weights (red/blue = legs)", weights_image(entry, texture))]
+        tiles = [("weights (thighs red/blue, shins orange/cyan)", weights_image(entry, texture))]
         for label, mode, l, r in POSES:
             tiles.append((label, render(entry, texture, m, mode, l, r)))
         if top is not None:
-            tiles.append((f"hips, with {top[0]['name']}", render(entry, texture, m, "hips", 2, 2, top)))
+            tiles.append((f"rows, with {top[0]['name']}", render(entry, texture, m, "rows", STRAIGHT, STRAIGHT, top)))
         scale = 0.36
         cells = [(label, im.resize((int(im.width * scale * (CANVAS[1] / im.height)) if i == 0 else int(im.width * scale),
                                     int(CANVAS[1] * scale)), Image.LANCZOS)) for i, (label, im) in enumerate(tiles)]
