@@ -1,0 +1,45 @@
+{
+  "note": "Glasses pairs the app offers, in the order the Glasses button steps through them. Each file is written by tools/prepare_glasses.py: metres, +Y up, the front facing +Z, real size, parts named Frame, Lenses, ArmLeft and ArmRight. earFromMm is how far behind the front of the lenses the arms bend down behind the ears.",
+  "glasses": [
+    {
+      "id": "sunglasses_khronos",
+      "name": "Aviators",
+      "file": "sunglasses_khronos.glb",
+      "widthMm": 149.8,
+      "earFromMm": 131.1,
+      "triangles": 12372
+    },
+    {
+      "id": "black_wood_frames",
+      "name": "Black wood",
+      "file": "black_wood_frames.glb",
+      "widthMm": 140.7,
+      "earFromMm": 101.1,
+      "triangles": 12500
+    },
+    {
+      "id": "black_violet_frames",
+      "name": "Black & violet",
+      "file": "black_violet_frames.glb",
+      "widthMm": 135.9,
+      "earFromMm": 132.0,
+      "triangles": 12498
+    },
+    {
+      "id": "brown_round_frames",
+      "name": "Brown round",
+      "file": "brown_round_frames.glb",
+      "widthMm": 140.0,
+      "earFromMm": 107.8,
+      "triangles": 12402
+    },
+    {
+      "id": "tortoise_cat_eye",
+      "name": "Tortoise cat-eye",
+      "file": "tortoise_cat_eye.glb",
+      "widthMm": 140.0,
+      "earFromMm": 105.8,
+      "triangles": 12524
+    }
+  ]
+}

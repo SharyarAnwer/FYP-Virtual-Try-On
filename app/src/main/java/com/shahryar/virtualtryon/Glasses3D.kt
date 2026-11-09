@@ -3,22 +3,25 @@ package com.shahryar.virtualtryon
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import kotlin.math.cos
 import kotlin.math.min
-import kotlin.math.sin
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 /**
  * A pair of glasses as a 3D shape, worn on the face Face Mesh finds and drawn with the view's own
- * Canvas (M5, 3D trial).
+ * Canvas (M5).
  *
- * The shape is built here from simple parts - two rims, a bridge, two arms - in millimetres, as
- * square tubes cut into triangles. Each frame the head's position and turn come from four Face
- * Mesh points: the outer eye corners give the left-right axis and the scale, forehead to chin the
+ * The shape is a [GlassesShape]: a real 3D model read from a file, or the plain black pair built
+ * in code if it cannot be read. Each frame the head's position and turn come from four Face Mesh
+ * points: the outer eye corners give the left-right axis and the scale, forehead to chin the
  * up-down axis, and the two together which way the face points. The glasses are turned and
- * scaled into that frame and drawn as flat-shaded triangles, farthest first, so nearer parts
- * cover farther ones. Seen straight on, the camera is far enough away that perspective is left
- * out: depth decides only what is drawn over what.
+ * scaled into that frame and drawn as triangles, farthest first, so nearer parts cover farther
+ * ones. Each corner is shaded as the model's material describes it: a matt part by how squarely
+ * it faces the camera, its own colour where it faces it; a metal part by what it reflects, a
+ * plain room bright above and dark below; a polished one with a highlight from a light above
+ * and to the left. The colour is blended across each triangle, so a curved model looks smooth.
+ * Seen straight on, the camera is far enough away that perspective is left out: depth decides
+ * only what is drawn over what.
  *
  * Parts behind the head are hidden, as on a person. The rims and bridge are always in front of
  * the face. The arms run back along the sides of the head and are hidden behind it, taken as an
@@ -29,10 +32,10 @@ import kotlin.math.sqrt
  * Face Mesh finds. The near arm is not: on a turned head it lies over the temple turned to the
  * camera, inside that outline but in plain view.
  *
- * No 3D engine is involved: drawing a few thousand triangles back to front with
- * Canvas.drawVertices keeps the glasses in the same view, and the same order, as the garments.
+ * No 3D engine is involved: drawing the triangles back to front with Canvas.drawVertices keeps
+ * the glasses in the same view, and the same order, as the garments.
  */
-class Glasses3D {
+class Glasses3D(private val shape: GlassesShape) {
 
     companion object {
         // Face Mesh points.
@@ -44,7 +47,7 @@ class Glasses3D {
         /** Distance between an adult's outer eye corners, mm: sets the glasses' scale. */
         const val EYE_CORNERS_MM = 92f
 
-        /** How far in front of the outer eye corners the lenses sit, mm. */
+        /** How far in front of the outer eye corners the front of the lenses sits, mm. */
         const val LENS_FORWARD_MM = 16f
 
         /**
@@ -69,188 +72,61 @@ class Glasses3D {
          */
         const val NEAR_TURN = 0.05f
 
-        // What each triangle is part of, for hiding inside the face's outline (see draw).
-        private const val PART_FRAME: Byte = 0
-        private const val PART_ARM: Byte = 1
-        private const val PART_EAR: Byte = 2
+        // Matt surfaces are lit from the camera: edge-on AMBIENT, facing it AMBIENT + DIFFUSE = 1,
+        // its own colour exactly.
+        private const val AMBIENT = 0.45f
+        private const val DIFFUSE = 0.55f
 
-        // The frame's shape, mm: lens width and height, bridge, how much the front wraps back.
-        private const val LENS_W = 52f
-        private const val LENS_H = 40f
-        private const val LENS_RADIUS = 11f
-        private const val BRIDGE = 18f
-        private const val LENS_DROP = 3f
-        private const val WRAP = 0.0022f
+        // Metal shows what it reflects: a plain room around the head, bright above, dimmer at eye
+        // level, dark below.
+        private const val SKY = 1f
+        private const val HORIZON = 0.7f
+        private const val FLOOR = 0.2f
+
+        // One light, up and to the left in front of the face, as unit vector towards it (view
+        // axes: x right, y down, z away from the camera). Its highlight is HIGHLIGHT strong on
+        // polished metal, NON_METAL_SHINE of that on plastic and glass, none on matt surfaces;
+        // its sharpness runs from HIGHLIGHT_ROUGH to HIGHLIGHT_SMOOTH with polish.
+        private const val LIGHT_X = -0.398f
+        private const val LIGHT_Y = -0.6965f
+        private const val LIGHT_Z = -0.597f
+        private const val HIGHLIGHT = 0.6f
+        private const val NON_METAL_SHINE = 0.04f
+        private const val HIGHLIGHT_ROUGH = 4f
+        private const val HIGHLIGHT_SMOOTH = 24f
 
         /** Face Mesh's outline of the face, in order round it. */
         private val FACE_OVAL = intArrayOf(10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
             397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
             162, 21, 54, 103, 67, 109)
-
-        private val FRAME_COLOUR = Color.rgb(30, 30, 34)
-        private val ARM_COLOUR = Color.rgb(42, 42, 48)
     }
 
-    // The model: triangles as three x, y, z vertices in mm, and a colour per triangle.
-    private val model: FloatArray
-    private val colours: IntArray
-    private val triangles: Int
-
-    /**
-     * Per triangle, which part it belongs to: the frame never hides inside the face's outline, an
-     * arm only on the far side, the ends curling behind the ears on both sides.
-     */
-    private val parts: ByteArray
+    private val triangles = shape.triangles
 
     // Per frame scratch, allocated once.
-    private val placed: FloatArray
-    private val hidden: BooleanArray
-    private val keys: LongArray
-    private val verts: FloatArray
-    private val vertColours: IntArray
-    private val paint = Paint()
+    private val placed = FloatArray(triangles * 9)
+    private val hidden = BooleanArray(triangles * 3)
+    private val keys = LongArray(triangles)
+    private val verts = FloatArray(triangles * 6)
+    private val vertColours = IntArray(triangles * 3)
+
+    /**
+     * White: drawVertices multiplies each corner's colour by the paint's, so the default black
+     * paint would turn every part black and leave only its alpha.
+     */
+    private val paint = Paint().apply { color = Color.WHITE }
 
     private val oval = FloatArray(FACE_OVAL.size * 2)
+    private var ovalLeft = 0f
+    private var ovalTop = 0f
+    private var ovalRight = 0f
+    private var ovalBottom = 0f
     private val smooth = FloatArray(12)
     private var smoothed = false
 
-    init {
-        val tris = ArrayList<Float>()
-        val cols = ArrayList<Int>()
-        val tags = ArrayList<Byte>()
-        val centreY = LENS_DROP
-        for (side in intArrayOf(-1, 1)) {
-            val cx = side * (BRIDGE / 2f + LENS_W / 2f)
-            tube(rim(cx, centreY), closed = true, halfWide = 2.6f, halfDeep = 2f, refZ = true, colour = FRAME_COLOUR, tris, cols, tags, PART_FRAME)
-            // End piece from the rim's outer top corner back to the hinge, then the arm.
-            val outer = side * (BRIDGE / 2f + LENS_W)
-            val hingeY = centreY - LENS_H / 2f + 8f
-            tube(listOf(wrapped(outer - side * 1f, hingeY, 0f), wrapped(outer + side * 4f, hingeY, 0f)),
-                closed = false, halfWide = 2.6f, halfDeep = 2f, refZ = true, colour = FRAME_COLOUR, tris, cols, tags, PART_FRAME)
-            val hinge = wrapped(outer + side * 4f, hingeY, 0f)
-            val arm = ArrayList<FloatArray>()
-            for (k in 0..12) {
-                val t = k / 12f
-                val z = hinge[2] + 4f + t * 96f
-                arm += floatArrayOf(hinge[0] + side * 3f * t, hingeY, z)
-            }
-            // The end curls down behind the ear, and in towards the head as it does.
-            val earFrom = arm.size - 1
-            for (k in 1..5) {
-                val a = k / 5f * 0.9f
-                arm += floatArrayOf(hinge[0] + side * (3f - 10f * k / 5f), hingeY + 30f * sin(a),
-                    hinge[2] + 100f + 24f * sin(a) * cos(a))
-            }
-            tube(arm, closed = false, halfWide = 2.4f, halfDeep = 1.3f, refZ = false, colour = ARM_COLOUR, tris, cols, tags, PART_ARM, earFrom)
-        }
-        // Bridge: an arch between the two rims' inner tops.
-        val bridge = ArrayList<FloatArray>()
-        for (k in 0..8) {
-            val x = -BRIDGE / 2f - 1f + (BRIDGE + 2f) * k / 8f
-            bridge += wrapped(x, centreY - 9f - 3f * sin(Math.PI.toFloat() * k / 8f), 0f)
-        }
-        tube(bridge, closed = false, halfWide = 1.8f, halfDeep = 1.8f, refZ = true, colour = FRAME_COLOUR, tris, cols, tags, PART_FRAME)
-
-        model = tris.toFloatArray()
-        colours = cols.toIntArray()
-        parts = tags.toByteArray()
-        triangles = colours.size
-        placed = FloatArray(model.size)
-        hidden = BooleanArray(model.size / 3)
-        keys = LongArray(triangles)
-        verts = FloatArray(triangles * 6)
-        vertColours = IntArray(triangles * 3)
-    }
-
-    /** A point on the frame's front, pushed back as the front wraps round towards the ears. */
-    private fun wrapped(x: Float, y: Float, z: Float) = floatArrayOf(x, y, z + WRAP * x * x)
-
-    /** One lens rim, a rounded rectangle centred on ([cx], [cy]), as a closed path. */
-    private fun rim(cx: Float, cy: Float): List<FloatArray> {
-        val out = ArrayList<FloatArray>()
-        val hw = LENS_W / 2f - LENS_RADIUS
-        val hh = LENS_H / 2f - LENS_RADIUS
-        val perCorner = 10
-        for (corner in 0 until 4) {
-            // Clockwise from the top right: top right, bottom right, bottom left, top left.
-            val ox = if (corner < 2) hw else -hw
-            val oy = if (corner == 0 || corner == 3) -hh else hh
-            for (k in 0 until perCorner) {
-                val a = (corner * 90f + 90f * k / perCorner - 90f) * Math.PI.toFloat() / 180f
-                out += wrapped(cx + ox + LENS_RADIUS * cos(a), cy + oy + LENS_RADIUS * sin(a), 0f)
-            }
-        }
-        return out
-    }
-
-    /**
-     * Adds a square tube along [path] to [tris]: at each point a rectangle across the path,
-     * [halfWide] one way and [halfDeep] the other, joined to the next by four quads. The deep
-     * direction is the depth axis for a part in the frame's front ([refZ]), the side-to-side axis
-     * for an arm. Each triangle is tagged [part] in [tags], or [PART_EAR] from segment [earFrom]
-     * on: the arm's end curling behind the ear.
-     */
-    private fun tube(
-        path: List<FloatArray>, closed: Boolean, halfWide: Float, halfDeep: Float, refZ: Boolean,
-        colour: Int, tris: MutableList<Float>, cols: MutableList<Int>, tags: MutableList<Byte>, part: Byte,
-        earFrom: Int = Int.MAX_VALUE
-    ) {
-        val n = path.size
-        val rings = ArrayList<Array<FloatArray>>()
-        for (i in 0 until n) {
-            val prev = path[if (i > 0) i - 1 else if (closed) n - 1 else 0]
-            val next = path[if (i < n - 1) i + 1 else if (closed) 0 else n - 1]
-            var tx = next[0] - prev[0]
-            var ty = next[1] - prev[1]
-            var tz = next[2] - prev[2]
-            val tl = sqrt(tx * tx + ty * ty + tz * tz)
-            tx /= tl; ty /= tl; tz /= tl
-            val rx = if (refZ) 0f else 1f
-            val rz = if (refZ) 1f else 0f
-            // across = t x ref, deep = across x t
-            var ax = ty * rz
-            var ay = tz * rx - tx * rz
-            var az = -ty * rx
-            val al = sqrt(ax * ax + ay * ay + az * az)
-            ax /= al; ay /= al; az /= al
-            val dx = ay * tz - az * ty
-            val dy = az * tx - ax * tz
-            val dz = ax * ty - ay * tx
-            val p = path[i]
-            rings += Array(4) { c ->
-                val a = if (c == 0 || c == 3) halfWide else -halfWide
-                val d = if (c < 2) halfDeep else -halfDeep
-                floatArrayOf(p[0] + ax * a + dx * d, p[1] + ay * a + dy * d, p[2] + az * a + dz * d)
-            }
-        }
-        val segments = if (closed) n else n - 1
-        for (i in 0 until segments) {
-            val r0 = rings[i]
-            val r1 = rings[(i + 1) % n]
-            for (c in 0 until 4) {
-                quad(r0[c], r0[(c + 1) % 4], r1[(c + 1) % 4], r1[c], colour, tris, cols)
-            }
-            val tag = if (i >= earFrom) PART_EAR else part
-            repeat(8) { tags += tag }
-        }
-        if (!closed) {
-            quad(rings[0][0], rings[0][1], rings[0][2], rings[0][3], colour, tris, cols)
-            quad(rings[n - 1][0], rings[n - 1][1], rings[n - 1][2], rings[n - 1][3], colour, tris, cols)
-            val endTag = if (n - 2 >= earFrom) PART_EAR else part
-            tags += part; tags += part
-            tags += endTag; tags += endTag
-        }
-    }
-
-    private fun quad(a: FloatArray, b: FloatArray, c: FloatArray, d: FloatArray, colour: Int,
-                     tris: MutableList<Float>, cols: MutableList<Int>) {
-        for (v in arrayOf(a, b, c, a, c, d)) tris += v.asList()
-        cols += colour
-        cols += colour
-    }
-
     /** Whether the view point ([x], [y]) is inside the face's outline, by ray casting. */
     private fun inFace(x: Float, y: Float): Boolean {
+        if (x < ovalLeft || x > ovalRight || y < ovalTop || y > ovalBottom) return false
         var inside = false
         val n = FACE_OVAL.size
         var j = n - 1
@@ -293,8 +169,8 @@ class Glasses3D {
         smoothed = true
 
         // The head's frame: X along the eye corners, Y down the face square to X, Z away from
-        // the camera. Mirroring may make it a reflection; the glasses are symmetric, so that
-        // changes nothing.
+        // the camera. Mirroring may make it a reflection, which swaps the glasses' left and
+        // right; a pair is near enough symmetric for that not to show.
         var xx = smooth[3] - smooth[0]
         var xy = smooth[4] - smooth[1]
         var xz = smooth[5] - smooth[2]
@@ -331,16 +207,22 @@ class Glasses3D {
         val uz = -zz / HEAD_HALF_DEPTH_MM
         val a = ux * ux + uy * uy + uz * uz
 
+        ovalLeft = Float.MAX_VALUE; ovalTop = Float.MAX_VALUE
+        ovalRight = -Float.MAX_VALUE; ovalBottom = -Float.MAX_VALUE
         for ((k, id) in FACE_OVAL.withIndex()) {
-            oval[k * 2] = face[id * 3] * sx + dx
-            oval[k * 2 + 1] = face[id * 3 + 1] * sy + dy
+            val x = face[id * 3] * sx + dx
+            val y = face[id * 3 + 1] * sy + dy
+            oval[k * 2] = x
+            oval[k * 2 + 1] = y
+            ovalLeft = minOf(ovalLeft, x); ovalRight = maxOf(ovalRight, x)
+            ovalTop = minOf(ovalTop, y); ovalBottom = maxOf(ovalBottom, y)
         }
         // The side of the model, +x or -x, turned towards the camera; 0 facing it. X's depth
         // grows away from the camera, so the side it points to is the far one.
         val nearSide = if (xz < -NEAR_TURN) 1f else if (xz > NEAR_TURN) -1f else 0f
 
-        val points = model.size / 3
-        for (v in 0 until points) {
+        val model = shape.positions
+        for (v in 0 until triangles * 3) {
             val px = model[v * 3]
             val py = model[v * 3 + 1]
             val pz = model[v * 3 + 2]
@@ -362,15 +244,16 @@ class Glasses3D {
             hidden[v] = c < 0f || (b < 0f && b * b - 4f * a * c >= 0f)
         }
 
+        val parts = shape.parts
         var n = 0
         for (t in 0 until triangles) {
             val v = t * 3
             if (hidden[v] || hidden[v + 1] || hidden[v + 2]) continue
             val part = parts[t]
-            if (part != PART_FRAME) {
+            if (part != GlassesShape.PART_FRAME) {
                 // The near arm lies over the temple turned to the camera: inside the face's
                 // outline, but in view. The far arm and both ear ends hide there.
-                val nearArm = part == PART_ARM && model[t * 9] * nearSide > 0f
+                val nearArm = part == GlassesShape.PART_ARM && model[t * 9] * nearSide > 0f
                 if (!nearArm && (inFace(placed[v * 3], placed[v * 3 + 1]) || inFace(placed[v * 3 + 3], placed[v * 3 + 4]) ||
                         inFace(placed[v * 3 + 6], placed[v * 3 + 7]))) continue
             }
@@ -381,28 +264,50 @@ class Glasses3D {
         }
         java.util.Arrays.sort(keys, 0, n)
 
+        // Shading, for the triangles drawn only: each corner by its material, as the model gives it.
+        val colours = shape.colours
+        val normals = shape.normals
         for (i in 0 until n) {
             val t = (keys[i] and 0xffffffffL).toInt()
-            val v = t * 9
-            val ax = placed[v]; val ay = placed[v + 1]; val az = placed[v + 2]
-            val bx = placed[v + 3]; val by = placed[v + 4]; val bz = placed[v + 5]
-            val qx = placed[v + 6]; val qy = placed[v + 7]; val qz = placed[v + 8]
-            // Flat shading: lit from the camera, by how squarely the triangle faces it.
-            val nx = (by - ay) * (qz - az) - (bz - az) * (qy - ay)
-            val ny = (bz - az) * (qx - ax) - (bx - ax) * (qz - az)
-            val nz = (bx - ax) * (qy - ay) - (by - ay) * (qx - ax)
-            val nl = sqrt(nx * nx + ny * ny + nz * nz)
-            val light = if (nl > 0f) 0.45f + 0.55f * kotlin.math.abs(nz) / nl else 0.45f
-            val base = colours[t]
-            val colour = Color.rgb(min(255, (Color.red(base) * light * 1.6f).toInt()),
-                min(255, (Color.green(base) * light * 1.6f).toInt()),
-                min(255, (Color.blue(base) * light * 1.6f).toInt()))
-            verts[i * 6] = ax; verts[i * 6 + 1] = ay
-            verts[i * 6 + 2] = bx; verts[i * 6 + 3] = by
-            verts[i * 6 + 4] = qx; verts[i * 6 + 5] = qy
-            vertColours[i * 3] = colour
-            vertColours[i * 3 + 1] = colour
-            vertColours[i * 3 + 2] = colour
+            val metal = shape.metallic[t]
+            val rough = shape.roughness[t]
+            val shine = (NON_METAL_SHINE + (1f - NON_METAL_SHINE) * metal) * (1f - rough) * HIGHLIGHT
+            val sharpness = (HIGHLIGHT_ROUGH + (HIGHLIGHT_SMOOTH - HIGHLIGHT_ROUGH) * (1f - rough)).toDouble()
+            for (c in 0 until 3) {
+                val v = t * 3 + c
+                verts[i * 6 + c * 2] = placed[v * 3]
+                verts[i * 6 + c * 2 + 1] = placed[v * 3 + 1]
+                // The corner's normal in view, turned to face the camera: an inside face showing
+                // through is lit like an outside one.
+                val nx = normals[v * 3]
+                val ny = normals[v * 3 + 1]
+                val nz = normals[v * 3 + 2]
+                var wx = nx * xx + ny * yx + nz * zx
+                var wy = nx * xy + ny * yy + nz * zy
+                var wz = nx * xz + ny * yz + nz * zz
+                if (wz > 0f) {
+                    wx = -wx; wy = -wy; wz = -wz
+                }
+                // Matt: by how squarely the surface faces the camera.
+                val diffuse = AMBIENT - DIFFUSE * wz
+                // Metal: the room in the direction the line of sight bounces off the surface.
+                val rx = -2f * wz * wx
+                val ry = -2f * wz * wy
+                val rz = 1f - 2f * wz * wz
+                val up = -ry
+                val room = if (up >= 0f) HORIZON + (SKY - HORIZON) * up else HORIZON + (HORIZON - FLOOR) * up
+                val k = ((1f - metal) * diffuse + metal * room) * shape.brighten
+                var add = 0f
+                if (shine > 0f) {
+                    val towards = rx * LIGHT_X + ry * LIGHT_Y + rz * LIGHT_Z
+                    if (towards > 0f) add = shine * towards.toDouble().pow(sharpness).toFloat() * 255f
+                }
+                val base = colours[v]
+                vertColours[i * 3 + c] = Color.argb(Color.alpha(base),
+                    min(255, (Color.red(base) * k + add).toInt()),
+                    min(255, (Color.green(base) * k + add).toInt()),
+                    min(255, (Color.blue(base) * k + add).toInt()))
+            }
         }
         if (n > 0) {
             canvas.drawVertices(Canvas.VertexMode.TRIANGLES, n * 6, verts, 0, null, 0,

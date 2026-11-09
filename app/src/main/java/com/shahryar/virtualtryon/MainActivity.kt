@@ -82,6 +82,12 @@ class MainActivity : AppCompatActivity() {
 
     /** Whether glasses are worn (M5): Face Mesh runs only then. */
     @Volatile private var glassesOn = false
+
+    /** The pairs the Glasses button steps through after "off", from the glasses catalog. */
+    private var glassesPairs: List<GlassesPair> = emptyList()
+
+    /** Which of [glassesPairs] is worn, -1 for none. With no catalog, 0 is the built-in pair. UI thread only. */
+    private var glassesIndex = -1
     private var sourceBitmap: Bitmap? = null
     private var uprightBitmap: Bitmap? = null
     private var uprightCanvas: Canvas? = null
@@ -194,8 +200,12 @@ class MainActivity : AppCompatActivity() {
         // A tap on the picture hides the stats and every button, for a clear look at the garments,
         // and the next tap brings them back. The buttons sit above the overlay, so a tap on one
         // still reaches it; hidden ones take no taps.
+        glassesPairs = GlassesShape.catalog(this)
         binding.glassesButton.setOnClickListener {
-            glassesOn = !glassesOn
+            val count = maxOf(glassesPairs.size, 1)
+            glassesIndex = if (glassesIndex + 1 >= count) -1 else glassesIndex + 1
+            binding.overlayView.glassesPair = glassesPairs.getOrNull(glassesIndex)
+            glassesOn = glassesIndex >= 0
             updateGlassesButton()
         }
         binding.overlayView.setOnClickListener {
@@ -396,12 +406,13 @@ class MainActivity : AppCompatActivity() {
         if (now - lastPerfLogAtMs < PERF_LOG_INTERVAL_MS) return
         lastPerfLogAtMs = now
         Log.i(TAG, String.format(Locale.US,
-            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s/%s ease=%.2f trousers=%.2f face=%.1f pose=%s",
+            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s/%s ease=%.2f trousers=%.2f face=%.1f glassesDraw=%.1f pose=%s",
             perf.fps, perf.latencyMs, perf.prepMs, perf.inferenceMs, perf.unpackMs, perf.measureMs,
             if (masksActive) "on" else "off", bodyWidth.measuredLevels, BodyWidthMeter.LEVELS.size,
             binding.overlayView.topFitMode.name.lowercase(Locale.US),
             binding.overlayView.bottomFitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase,
-            binding.overlayView.trouserEase, if (glassesOn) perf.faceMs else Double.NaN, poseTracked))
+            binding.overlayView.trouserEase, if (glassesOn) perf.faceMs else Double.NaN,
+            if (glassesOn) binding.overlayView.glassesMs else Double.NaN, poseTracked))
     }
 
     /**
@@ -534,7 +545,10 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "Face Mesh failed to load; glasses switched off", e)
             glassesOn = false
-            runOnUiThread { updateGlassesButton() }
+            runOnUiThread {
+                glassesIndex = -1
+                updateGlassesButton()
+            }
             return null
         }
         val startNs = System.nanoTime()
@@ -544,7 +558,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateGlassesButton() {
-        binding.glassesButton.setText(if (glassesOn) R.string.glasses_on else R.string.glasses_off)
+        // The pair's name, as the garment buttons show the garment's.
+        binding.glassesButton.text = if (glassesIndex < 0) {
+            getString(R.string.glasses_off)
+        } else {
+            glassesPairs.getOrNull(glassesIndex)?.name ?: getString(R.string.glasses_built_in)
+        }
     }
 
     private fun updateSkeletonButton() {

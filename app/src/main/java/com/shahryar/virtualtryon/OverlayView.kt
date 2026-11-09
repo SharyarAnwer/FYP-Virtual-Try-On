@@ -587,8 +587,25 @@ class OverlayView @JvmOverloads constructor(
     /** Latest Face Mesh points from [FaceTracker], or null: no glasses worn, or no face found. */
     @Volatile private var face: FloatArray? = null
 
-    /** The glasses drawn on [face] (M5). UI thread only. */
-    private val glasses = Glasses3D()
+    /** The pair worn on [face] (M5), or null for the built-in pair. Set on the UI thread. */
+    var glassesPair: GlassesPair? = null
+        set(value) {
+            if (field != value) glasses?.reset()
+            field = value
+        }
+
+    /**
+     * Each pair's glasses, read the first time it is worn, or the built-in pair if its model
+     * cannot be read; keyed by [GlassesPair.id], "" for the built-in pair. UI thread only.
+     */
+    private val glassesById = HashMap<String, Glasses3D>()
+
+    /** The glasses drawn last frame, so their smoothing can be reset when the face is lost. */
+    private var glasses: Glasses3D? = null
+
+    /** Mean time spent drawing the glasses, ms, smoothed over recent frames; NaN before any. */
+    @Volatile var glassesMs: Double = Double.NaN
+        private set
 
     /** Publishes Face Mesh points for the glasses; the next [setPose] triggers the redraw. */
     fun setFace(points: FloatArray?) {
@@ -701,11 +718,20 @@ class OverlayView @JvmOverloads constructor(
     private fun drawGlasses(canvas: Canvas) {
         val f = face
         if (f == null || imageWidth <= 0 || imageHeight <= 0) {
-            glasses.reset()
+            glasses?.reset()
             return
         }
         computeMapping()
+        val pair = glassesPair
+        val glasses = glassesById.getOrPut(pair?.id ?: "") {
+            Glasses3D(if (pair != null) GlassesShape.load(context, pair) else GlassesShape.builtIn())
+        }
+        this.glasses = glasses
+        val startNs = System.nanoTime()
         glasses.draw(canvas, f, imageWidth, imageHeight, mapping[0], mapping[1], mapping[2])
+        val ms = (System.nanoTime() - startNs) / 1_000_000.0
+        val last = glassesMs
+        glassesMs = if (last.isNaN()) ms else last + 0.1 * (ms - last)
     }
 
     /**
