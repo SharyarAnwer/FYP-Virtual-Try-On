@@ -69,12 +69,44 @@
                 android:text="@string/switch_camera" />
 
             <com.google.android.material.button.MaterialButton
-                android:id="@+id/garmentButton"
+                android:id="@+id/topButton"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                tools:text="Basic White Tee" />
+                tools:text="Navy Polo" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/topFitButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                tools:text="@string/top_fit_chest" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/bottomButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                tools:text="@string/bottom_none" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/bottomFitButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                tools:text="@string/bottom_fit_rows" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/glassesButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                tools:text="@string/glasses_off" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/skeletonButton"
@@ -99,14 +131,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
                 tools:text="@string/mask_off" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/fitButton"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                tools:text="@string/fit_chest" />
         </LinearLayout>
     </FrameLayout>
 

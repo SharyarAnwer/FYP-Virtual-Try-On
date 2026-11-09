@@ -4,12 +4,18 @@
     <string name="grant_camera">Allow camera</string>
     <string name="camera_rationale">This app needs the camera to show garments on you in real time.</string>
     <string name="camera_denied">Camera access is off. Turn it on in Settings › Apps › Virtual Try On › Permissions.</string>
-    <string name="garment_none">No shirt</string>
+    <string name="top_none">No top</string>
+    <string name="bottom_none">No bottom</string>
     <string name="skeleton_on">Skeleton on</string>
     <string name="skeleton_off">Skeleton off</string>
     <string name="mask_on">Mask on</string>
     <string name="mask_off">Mask off</string>
-    <string name="fit_chest">Fit: chest</string>
-    <string name="fit_rows">Fit: rows</string>
-    <string name="fit_off">Fit: off</string>
+    <string name="top_fit_chest">Top fit: chest</string>
+    <string name="top_fit_rows">Top fit: rows</string>
+    <string name="top_fit_off">Top fit: off</string>
+    <string name="bottom_fit_hips">Bottom fit: hips</string>
+    <string name="bottom_fit_rows">Bottom fit: rows</string>
+    <string name="bottom_fit_off">Bottom fit: off</string>
+    <string name="glasses_off">No glasses</string>
+    <string name="glasses_built_in">Plain black glasses</string>
 </resources>

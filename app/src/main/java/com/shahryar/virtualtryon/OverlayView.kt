@@ -57,6 +57,12 @@ class OverlayView @JvmOverloads constructor(
         const val LEFT_ELBOW = 13
         const val RIGHT_ELBOW = 14
 
+        // Leg landmarks, for trousers (M4).
+        const val LEFT_KNEE = 25
+        const val RIGHT_KNEE = 26
+        const val LEFT_ANKLE = 27
+        const val RIGHT_ANKLE = 28
+
         // Face landmarks used to keep the garment behind the chin.
         const val LEFT_EYE = 2
         const val RIGHT_EYE = 5
@@ -88,6 +94,13 @@ class OverlayView @JvmOverloads constructor(
          */
         const val MIN_EASE = -0.6f
         const val MAX_EASE = 1.0f
+
+        /**
+         * The hip band, for fitting trousers by the hips (FitMode.CHEST): the measuring levels
+         * from just above to just below the hip line, on [BodyWidthMeter.LEVELS]'s scale.
+         */
+        const val HIP_FROM = 0.9f
+        const val HIP_TO = 1.1f
 
         /**
          * How much wider than the wearer's measured torso a garment's body is drawn, by its
@@ -271,6 +284,99 @@ class OverlayView @JvmOverloads constructor(
     }
 
     /**
+     * Everything needed to draw one pair of trousers (M4). Bone matrices and vertex buffers are
+     * allocated here, once, and reused every frame.
+     */
+    private class TrouserRender(
+        val front: Bitmap,
+        val mesh: TrouserMesh,
+        val leftHip: Anchor,
+        val rightHip: Anchor,
+        val leftKnee: Anchor,
+        val rightKnee: Anchor,
+        val leftAnkle: Anchor,
+        val rightAnkle: Anchor,
+        /** See [fitAllowance]. */
+        val allowance: Float
+    ) {
+        /** Pelvis, left thigh, left shin, right thigh, right shin — the order of [TrouserMesh.weights]. */
+        val bones = Array(TrouserMesh.BONES) { Matrix() }
+        val placed = Array(TrouserMesh.BONES) { FloatArray(mesh.vertexCount * 2) }
+        val vertices = FloatArray(mesh.vertexCount * 2)
+
+        /**
+         * Widening per leg per grid row, outward and inward of each row's pivot, set each frame
+         * by [fitTrousers]; see [TrouserMesh.widen]. 0 - the photo's own width - until the first
+         * body measurement arrives.
+         */
+        val outer = Array(2) { FloatArray(mesh.rows + 1) }
+        val inner = Array(2) { FloatArray(mesh.rows + 1) }
+        val widened = FloatArray(mesh.vertexCount * 2)
+
+        /** The wearer's half-width per side at each [BodyWidthMeter.LEVELS], in view px; NaN if unknown. */
+        val levelHalves = Array(2) { FloatArray(BodyWidthMeter.LEVELS.size) }
+
+        /** The wearer's legs at each [BodyWidthMeter.LEG_SAMPLES], outer and inner, in view px. */
+        val legOuterView = Array(2) { FloatArray(BodyWidthMeter.LEG_SAMPLES.size) }
+        val legInnerView = Array(2) { FloatArray(BodyWidthMeter.LEG_SAMPLES.size) }
+        val hipScratch = FloatArray(BodyWidthMeter.LEVELS.size)
+
+        /** Per side, the widening that fits the hips; see [fitTrousers]. */
+        val hipEase = FloatArray(2)
+
+        /** One leg's thigh and shin: view px per artwork px across each; see [fitTrousers]. */
+        val segmentScale = FloatArray(2)
+
+        /** The hip anchors' spacing, in artwork px. */
+        val hipSpan = hypot(rightHip.x - leftHip.x, rightHip.y - leftHip.y)
+
+        private val leftThigh = hypot(leftKnee.x - leftHip.x, leftKnee.y - leftHip.y)
+        private val rightThigh = hypot(rightKnee.x - rightHip.x, rightKnee.y - rightHip.y)
+        private val leftLeg = leftThigh + hypot(leftAnkle.x - leftKnee.x, leftAnkle.y - leftKnee.y)
+        private val rightLeg = rightThigh + hypot(rightAnkle.x - rightKnee.x, rightAnkle.y - rightKnee.y)
+
+        /** The two legs' mean length, hip to knee to ankle, in artwork px. */
+        val legLength = (leftLeg + rightLeg) / 2f
+
+        /** Per leg, hip to knee to ankle over hip to knee: a wearer's thigh times this is their leg. */
+        val legPerThigh = floatArrayOf(leftLeg / leftThigh, rightLeg / rightThigh)
+
+        /**
+         * Per thigh and shin, in bone order after the pelvis: the unit vector across it on the
+         * photo, square to its hip -> knee or knee -> ankle anchors.
+         */
+        val acrossX = FloatArray(4)
+        val acrossY = FloatArray(4)
+
+        init {
+            val joints = arrayOf(leftHip, leftKnee, leftAnkle, rightHip, rightKnee, rightAnkle)
+            for (k in 0 until 4) {
+                val a = joints[k / 2 * 3 + k % 2]
+                val b = joints[k / 2 * 3 + k % 2 + 1]
+                val n = hypot(b.x - a.x, b.y - a.y)
+                acrossX[k] = -(b.y - a.y) / n
+                acrossY[k] = (b.x - a.x) / n
+            }
+        }
+
+        companion object {
+            fun from(garment: Garment, layers: GarmentLayers): TrouserRender? {
+                return TrouserRender(
+                    front = layers.meshFront ?: return null,
+                    mesh = layers.trousers ?: return null,
+                    leftHip = garment.anchor("left_hip") ?: return null,
+                    rightHip = garment.anchor("right_hip") ?: return null,
+                    leftKnee = garment.anchor("left_knee") ?: return null,
+                    rightKnee = garment.anchor("right_knee") ?: return null,
+                    leftAnkle = garment.anchor("left_ankle") ?: return null,
+                    rightAnkle = garment.anchor("right_ankle") ?: return null,
+                    allowance = fitAllowance(garment.fitStyle)
+                )
+            }
+        }
+    }
+
+    /**
      * One sleeve's own axes on the garment photo: its centre line, from the middle of the armhole
      * to the middle of the cuff, and the direction across it. [origin] is the shoulder joint moved
      * onto that line; [length] runs from there to the elbow anchor along it; [width] is the cuff's
@@ -363,6 +469,9 @@ class OverlayView @JvmOverloads constructor(
 
     private val torsoMatrix = Matrix()
     private val torsoInverse = Matrix()
+    private val point = FloatArray(2)
+    private val pelvisMatrix = Matrix()
+    private val pelvisInverse = Matrix()
     private val matrixValues = FloatArray(9)
     private val vector = FloatArray(2)
     private val src = FloatArray(6)
@@ -381,7 +490,6 @@ class OverlayView @JvmOverloads constructor(
     /** Previous smoothed frame. Analysis thread only. */
     private var previous: FloatArray? = null
 
-    @Volatile private var render: GarmentRender? = null
 
     /**
      * Whether to draw the pose skeleton. Off by default: drawn over a garment, its lines and
@@ -393,14 +501,23 @@ class OverlayView @JvmOverloads constructor(
             field = value
             postInvalidate()
         }
-    @Volatile private var meshRender: MeshRender? = null
+
+    /** The two garments that can be worn together (M4): a shirt and a pair of trousers. */
+    enum class Slot { TOP, BOTTOM }
+
+    /** One slot's garment, ready to draw: layered (M3.5), a mesh shirt (M3.6) or trousers (M4). */
+    private class Worn(val layered: GarmentRender?, val meshed: MeshRender?, val trousers: TrouserRender?)
+
+    @Volatile private var top: Worn? = null
+    @Volatile private var bottom: Worn? = null
 
     /** Latest body-width snapshot from [BodyWidthMeter], or null. Drawn with the skeleton. */
     @Volatile private var bodyWidths: FloatArray? = null
 
     /**
      * How a real garment's body is fitted to the wearer's measured width (M3.6). All three are
-     * kept so they can be compared on device; the Fit button switches between them.
+     * kept so they can be compared on device; the Top fit and Bottom fit buttons switch between
+     * them, each for its own garment.
      */
     enum class FitMode {
         /**
@@ -408,18 +525,36 @@ class OverlayView @JvmOverloads constructor(
          * armpits, applied to every row. The garment keeps its own shape below that - straight
          * sides stay straight - rather than following the wearer's clothes. Fitted per row, a
          * loose kameez that flares from the armpits made the polo flare and bulge with it.
+         *
+         * Trousers are fitted the same way by the hips: each side to the wearer's at the hip
+         * line, one widening for every row, the legs keeping the garment's own shape.
          */
         CHEST,
 
-        /** Every row fitted to the wearer's width at that height, clothes included. */
+        /**
+         * Every row fitted to the wearer's width at that height, clothes included. For trousers,
+         * the seat row by row, and each leg to its measured thickness down its length.
+         */
         ROWS,
 
         /** No fitting: the garment at its photo's own proportions, scaled to the shoulders. */
         OFF
     }
 
-    /** See [FitMode]. */
-    @Volatile var fitMode: FitMode = FitMode.CHEST
+    /** How the top is fitted; see [FitMode]. */
+    @Volatile var topFitMode: FitMode = FitMode.CHEST
+        set(value) {
+            field = value
+            postInvalidate()
+        }
+
+    /**
+     * How the bottom is fitted; see [FitMode]. Row by row by default, unlike the top: on device,
+     * over the tester's loose trousers, fitting the khaki chinos by the hips kept their taper, and
+     * his own trousers showed down the outer thighs and between the legs; fitted row by row they
+     * were covered in all three poses. One mode for both garments could not suit both.
+     */
+    @Volatile var bottomFitMode: FitMode = FitMode.ROWS
         set(value) {
             field = value
             postInvalidate()
@@ -430,6 +565,10 @@ class OverlayView @JvmOverloads constructor(
      * NaN until a garment has been fitted.
      */
     @Volatile var fittedEase: Float = Float.NaN
+        private set
+
+    /** The same for trousers: mean widening over their rows in the last frame; NaN before any. */
+    @Volatile var trouserEase: Float = Float.NaN
         private set
 
     /** Publishes a body-width snapshot; the next [setPose] triggers the redraw. */
@@ -445,23 +584,66 @@ class OverlayView @JvmOverloads constructor(
         armWidths = snapshot
     }
 
+    /** Latest Face Mesh points from [FaceTracker], or null: no glasses worn, or no face found. */
+    @Volatile private var face: FloatArray? = null
+
+    /** The pair worn on [face] (M5), or null for the built-in pair. Set on the UI thread. */
+    var glassesPair: GlassesPair? = null
+        set(value) {
+            if (field != value) glasses?.reset()
+            field = value
+        }
+
     /**
-     * Sets the garment to render, or clears it when either argument is null. [layers] must be in
-     * the same order as [Garment.parts].
+     * Each pair's glasses, read the first time it is worn, or the built-in pair if its model
+     * cannot be read; keyed by [GlassesPair.id], "" for the built-in pair. UI thread only.
      */
-    fun setGarment(layers: GarmentLayers?, garment: Garment?) {
+    private val glassesById = HashMap<String, Glasses3D>()
+
+    /** The glasses drawn last frame, so their smoothing can be reset when the face is lost. */
+    private var glasses: Glasses3D? = null
+
+    /** Mean time spent drawing the glasses, ms, smoothed over recent frames; NaN before any. */
+    @Volatile var glassesMs: Double = Double.NaN
+        private set
+
+    /** Publishes Face Mesh points for the glasses; the next [setPose] triggers the redraw. */
+    fun setFace(points: FloatArray?) {
+        face = points
+    }
+
+    /** Latest leg-thickness snapshot from [BodyWidthMeter.lastLegs], or null. */
+    @Volatile private var legWidths: FloatArray? = null
+
+    /** Publishes a leg-thickness snapshot; the next [setPose] triggers the redraw. */
+    fun setLegWidths(snapshot: FloatArray?) {
+        legWidths = snapshot
+    }
+
+    /**
+     * Sets the garment worn in [slot], or clears it when either argument is null. [layers] must be
+     * in the same order as [Garment.parts].
+     */
+    fun setGarment(slot: Slot, layers: GarmentLayers?, garment: Garment?) {
         var layered: GarmentRender? = null
         var meshed: MeshRender? = null
+        var trousers: TrouserRender? = null
         if (layers != null && garment != null) {
-            if (garment.render == RenderKind.MESH) {
+            if (layers.trousers != null) {
+                trousers = TrouserRender.from(garment, layers)
+            } else if (garment.render == RenderKind.MESH) {
                 meshed = MeshRender.from(garment, layers)
             } else if (layers.fills.size == garment.parts.size &&
                 layers.outlines.size == garment.parts.size && layers.seams.size == garment.parts.size) {
                 layered = GarmentRender(garment, layers)
             }
         }
-        render = layered
-        meshRender = meshed
+        val worn = if (layered == null && meshed == null && trousers == null) null
+            else Worn(layered, meshed, trousers)
+        when (slot) {
+            Slot.TOP -> top = worn
+            Slot.BOTTOM -> bottom = worn
+        }
         postInvalidate()
     }
 
@@ -506,6 +688,7 @@ class OverlayView @JvmOverloads constructor(
         val snapshot = pose
         if (snapshot == null || imageWidth <= 0 || imageHeight <= 0) {
             drawGuide(canvas)
+            drawGlasses(canvas)
             return
         }
 
@@ -513,14 +696,42 @@ class OverlayView @JvmOverloads constructor(
         val faceSeen = computeFace(snapshot)
         val checkpoint = canvas.save()
         if (faceSeen) canvas.clipOutPath(facePath)
-        val wearingGarment = drawGarment(canvas, snapshot)
+        // The bottom first, so a shirt's hem covers the trousers' waistband, as when it is worn out.
+        val wearingBottom = bottom?.let { drawGarment(canvas, snapshot, it) } ?: false
+        val wearingTop = top?.let { drawGarment(canvas, snapshot, it) } ?: false
+        val wearingGarment = wearingBottom || wearingTop
         canvas.restoreToCount(checkpoint)
+        drawGlasses(canvas)
         if (showSkeleton) {
             drawSkeleton(canvas, snapshot, dimmed = wearingGarment)
             if (faceSeen) canvas.drawPath(facePath, bonePaint)
             bodyWidths?.let { drawBodyWidths(canvas, it) }
             armWidths?.let { drawArmWidths(canvas, it) }
+            legWidths?.let { drawLegWidths(canvas, it) }
         }
+    }
+
+    /**
+     * Draws the glasses on the face Face Mesh last found, over every garment: they sit on the face,
+     * which the garments are clipped out of. With no face, the glasses' smoothing starts afresh.
+     */
+    private fun drawGlasses(canvas: Canvas) {
+        val f = face
+        if (f == null || imageWidth <= 0 || imageHeight <= 0) {
+            glasses?.reset()
+            return
+        }
+        computeMapping()
+        val pair = glassesPair
+        val glasses = glassesById.getOrPut(pair?.id ?: "") {
+            Glasses3D(if (pair != null) GlassesShape.load(context, pair) else GlassesShape.builtIn())
+        }
+        this.glasses = glasses
+        val startNs = System.nanoTime()
+        glasses.draw(canvas, f, imageWidth, imageHeight, mapping[0], mapping[1], mapping[2])
+        val ms = (System.nanoTime() - startNs) / 1_000_000.0
+        val last = glassesMs
+        glassesMs = if (last.isNaN()) ms else last + 0.1 * (ms - last)
     }
 
     /**
@@ -613,14 +824,15 @@ class OverlayView @JvmOverloads constructor(
      * position on the body instead of letting it vanish.
      *
      * The whole garment still needs the torso's four landmarks. Without them there is nothing to
-     * hang the limbs from.
+     * hang the limbs from. Trousers go to [drawTrousers] instead, which needs only the hips.
      */
-    private fun drawGarment(canvas: Canvas, p: FloatArray): Boolean {
+    private fun drawGarment(canvas: Canvas, p: FloatArray, worn: Worn): Boolean {
+        worn.trousers?.let { return drawTrousers(canvas, p, it) }
         if (!visible(p, LEFT_SHOULDER) || !visible(p, RIGHT_SHOULDER) ||
             !visible(p, LEFT_HIP) || !visible(p, RIGHT_HIP)) return false
-        meshRender?.let { return drawMeshGarment(canvas, p, it) }
+        worn.meshed?.let { return drawMeshGarment(canvas, p, it) }
 
-        val r = render ?: return false
+        val r = worn.layered ?: return false
         val handedness = computeTorso(p, r.leftShoulder ?: return false, r.rightShoulder ?: return false,
             r.leftHip ?: return false, r.rightHip ?: return false)
         if (handedness == 0f) return false
@@ -769,6 +981,295 @@ class OverlayView @JvmOverloads constructor(
     }
 
     /**
+     * Draws a pair of trousers bent over its grid (M4). Returns whether anything was drawn.
+     *
+     * Five bones. The pelvis, from [computePelvis], carries the waistband. Each leg has a thigh,
+     * hip to knee, and a shin, knee to ankle - see [legBones] - each as long as the wearer's and
+     * as wide as the pelvis is across it, through [segmentMatrix] as for a shirt's sleeves, so the
+     * leg bends at the knee. The grid is first widened to the wearer by [fitTrousers]. Every grid
+     * vertex then moves to the weighted blend of where each bone would put it, as for a shirt.
+     *
+     * Needs both hips. Mirrors place() in tools/preview_trousers.py. Change the two together.
+     */
+    private fun drawTrousers(canvas: Canvas, p: FloatArray, t: TrouserRender): Boolean {
+        if (!visible(p, LEFT_HIP) || !visible(p, RIGHT_HIP)) return false
+        val handedness = computePelvis(p, t)
+        if (handedness == 0f) return false
+
+        t.bones[0].set(pelvisMatrix)
+        legBones(t.leftHip, t.leftKnee, t.leftAnkle, LEFT_HIP, LEFT_KNEE, LEFT_ANKLE,
+            p, handedness, t.bones[1], t.bones[2])
+        legBones(t.rightHip, t.rightKnee, t.rightAnkle, RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE,
+            p, handedness, t.bones[3], t.bones[4])
+        fitTrousers(t)
+        t.mesh.widen(t.outer, t.inner, t.widened)
+        for (k in 0 until TrouserMesh.BONES) t.bones[k].mapPoints(t.placed[k], t.widened)
+
+        val w = t.mesh.weights
+        val bones = TrouserMesh.BONES
+        val out = t.vertices
+        for (v in 0 until t.mesh.vertexCount) {
+            var x = 0f
+            var y = 0f
+            for (k in 0 until bones) {
+                val wk = w[v * bones + k]
+                if (wk == 0f) continue
+                x += wk * t.placed[k][v * 2]
+                y += wk * t.placed[k][v * 2 + 1]
+            }
+            out[v * 2] = x
+            out[v * 2 + 1] = y
+        }
+        canvas.drawBitmapMesh(t.front, t.mesh.cols, t.mesh.rows, out, 0, null, 0, garmentPaint)
+        return true
+    }
+
+    /**
+     * Sets [TrouserRender.outer] and [TrouserRender.inner], the widening per leg per grid row, for
+     * the current [bottomFitMode]. Mirrors fit() in tools/preview_trousers.py. Change them together.
+     *
+     * - [FitMode.CHEST] fits by the hips. Each side of the garment at its hip anchors' row is made
+     *   as wide as that side of the wearer at the hip line - the median of the measured levels
+     *   from [HIP_FROM] to [HIP_TO] - times the fit allowance, and every row gets that one
+     *   widening, so the legs keep the garment's own shape. Left and right are fitted apart: the
+     *   tester's body reached further right of the hip joints than left, and a fit centred on the
+     *   joints left his own trousers showing on that side.
+     * - [FitMode.ROWS] fits row by row. The seat: each row to the wearer's width at the height it
+     *   lands on, along the shoulder-to-hip axis. The legs: each to its measured thickness at that
+     *   point, outer and inner sides apart; rows of the seat above the first leg row take that
+     *   row's. The two blend down the thigh along [TrouserMesh.legBlend]. Whatever is not
+     *   measured falls back to the hips' fit.
+     * - [FitMode.OFF] widens nothing.
+     *
+     * With nothing measured at the hips this frame the last fit is kept. Needs the bones set this
+     * frame.
+     */
+    private fun fitTrousers(t: TrouserRender) {
+        if (bottomFitMode == FitMode.OFF) {
+            for (s in 0..1) {
+                t.outer[s].fill(0f)
+                t.inner[s].fill(0f)
+            }
+            trouserEase = 0f
+            return
+        }
+        val body = bodyWidths ?: return
+        t.bones[0].getValues(matrixValues)
+        val rowScale = hypot(matrixValues[Matrix.MSCALE_X], matrixValues[Matrix.MSKEW_Y])
+        if (rowScale <= 0f) return
+        val mesh = t.mesh
+        val levels = BodyWidthMeter.LEVELS
+        levelHalves(body, t.levelHalves)
+
+        for (s in 0..1) {
+            var n = 0
+            for (k in levels.indices) {
+                val half = t.levelHalves[s][k]
+                if (levels[k] in HIP_FROM..HIP_TO && !half.isNaN()) t.hipScratch[n++] = half
+            }
+            val garmentHalf = mesh.halfWidth[s][mesh.hipRow]
+            t.hipEase[s] = if (n == 0 || garmentHalf < 1f) Float.NaN else {
+                java.util.Arrays.sort(t.hipScratch, 0, n)
+                (t.hipScratch[n / 2] * t.allowance / (garmentHalf * rowScale) - 1f).coerceIn(MIN_EASE, MAX_EASE)
+            }
+        }
+        // A side with nothing measured takes the other side's.
+        if (t.hipEase[0].isNaN() && t.hipEase[1].isNaN()) return
+        if (t.hipEase[0].isNaN()) t.hipEase[0] = t.hipEase[1]
+        if (t.hipEase[1].isNaN()) t.hipEase[1] = t.hipEase[0]
+
+        if (bottomFitMode == FitMode.CHEST) {
+            for (s in 0..1) {
+                t.outer[s].fill(t.hipEase[s])
+                t.inner[s].fill(t.hipEase[s])
+            }
+            trouserEase = (t.hipEase[0] + t.hipEase[1]) / 2f
+            return
+        }
+
+        // The wearer's shoulder-to-hip axis, from the first measuring level to the hip line's.
+        val stride = BodyWidthMeter.STRIDE
+        val hipLevel = levels.indexOfFirst { it >= 1f }
+        val sx = imageWidth * mapping[0]
+        val sy = imageHeight * mapping[0]
+        val topX = body[0] * sx + mapping[1]
+        val topY = body[1] * sy + mapping[2]
+        val axisX = body[hipLevel * stride] * sx + mapping[1] - topX
+        val axisY = body[hipLevel * stride + 1] * sy + mapping[2] - topY
+        val axisSq = axisX * axisX + axisY * axisY
+        if (axisSq < 1f) return
+
+        val legs = legWidths
+        for (s in 0..1) {
+            for (i in BodyWidthMeter.LEG_SAMPLES.indices) {
+                val p = s * BodyWidthMeter.LEG_STRIDE + i * BodyWidthMeter.LEG_SAMPLE_STRIDE
+                t.legOuterView[s][i] = if (legs == null || p + 1 >= legs.size) Float.NaN else legs[p] * sx
+                t.legInnerView[s][i] = if (legs == null || p + 1 >= legs.size) Float.NaN else legs[p + 1] * sx
+            }
+        }
+
+        var sum = 0f
+        var count = 0
+        val stridePoints = (mesh.cols + 1) * 2
+        for (s in 0..1) {
+            for (k in 0..1) {
+                vector[0] = t.acrossX[2 * s + k]
+                vector[1] = t.acrossY[2 * s + k]
+                t.bones[1 + 2 * s + k].mapVectors(vector)
+                t.segmentScale[k] = hypot(vector[0], vector[1])
+            }
+            for (r in 0..mesh.rows) {
+                point[0] = mesh.centreX
+                point[1] = mesh.source[r * stridePoints + 1]
+                t.bones[0].mapPoints(point)
+                val level = levels[0] + (levels[hipLevel] - levels[0]) *
+                    ((point[0] - topX) * axisX + (point[1] - topY) * axisY) / axisSq
+                val bodyHalf = widthAt(t.levelHalves[s], level)
+                val garmentHalf = mesh.halfWidth[s][r]
+                val seat = if (bodyHalf.isNaN() || garmentHalf < 1f) t.hipEase[s]
+                    else (bodyHalf * t.allowance / (garmentHalf * rowScale) - 1f).coerceIn(MIN_EASE, MAX_EASE)
+                val lr = maxOf(r, mesh.firstLegRow[s])
+                val legT = mesh.legT[s][lr]
+                val legScale = t.segmentScale[if (legT < 1f) 0 else 1]
+                val legOut = legEase(t.legOuterView[s], legT, mesh.legOuter[s][lr], legScale, t.allowance, t.hipEase[s])
+                val legIn = legEase(t.legInnerView[s], legT, mesh.legInner[s][lr], legScale, t.allowance, t.hipEase[s])
+                val f = mesh.legBlend[s][r]
+                t.outer[s][r] = (1f - f) * seat + f * legOut
+                t.inner[s][r] = (1f - f) * seat + f * legIn
+                if (garmentHalf >= 1f) {
+                    sum += t.outer[s][r]
+                    count++
+                }
+            }
+        }
+        trouserEase = if (count > 0) sum / count else Float.NaN
+    }
+
+    /**
+     * One side of a leg's widening at a row: the wearer's half-thickness there, from the samples in
+     * [view], over the garment's [garmentHalf] across the leg on screen; [fallback] where either is
+     * unknown.
+     */
+    private fun legEase(
+        view: FloatArray, legT: Float, garmentHalf: Float, legScale: Float, allowance: Float, fallback: Float
+    ): Float {
+        val bodyHalf = widthAt(view, legT, BodyWidthMeter.LEG_SAMPLES)
+        if (bodyHalf.isNaN() || garmentHalf < 1f || legScale <= 0f) return fallback
+        return (bodyHalf * allowance / (garmentHalf * legScale) - 1f).coerceIn(MIN_EASE, MAX_EASE)
+    }
+
+    /** Each measured level's left and right half-widths, in view px; NaN where unknown. */
+    private fun levelHalves(body: FloatArray, out: Array<FloatArray>) {
+        val sx = imageWidth * mapping[0]
+        val sy = imageHeight * mapping[0]
+        val stride = BodyWidthMeter.STRIDE
+        for (k in BodyWidthMeter.LEVELS.indices) {
+            val o = k * stride
+            if (o + stride > body.size) {
+                out[0][k] = Float.NaN
+                out[1][k] = Float.NaN
+                continue
+            }
+            val quality = body[o + 6].toInt()
+            val cx = body[o] * sx
+            val cy = body[o + 1] * sy
+            out[0][k] = if (quality / 3 != BodyWidthMeter.NONE) {
+                hypot(body[o + 2] * sx - cx, body[o + 3] * sy - cy)
+            } else Float.NaN
+            out[1][k] = if (quality % 3 != BodyWidthMeter.NONE) {
+                hypot(body[o + 4] * sx - cx, body[o + 5] * sy - cy)
+            } else Float.NaN
+        }
+    }
+
+    /**
+     * One leg's two bones. The [thigh] runs hip to knee - or hip to ankle with the knee out of
+     * sight, and hangs from the pelvis with both out of sight. The [shin] runs knee to ankle, or
+     * carries straight on from the thigh when either is out of sight. Both put the garment's knee
+     * anchor on the wearer's knee, so the leg bends there without opening a gap.
+     */
+    private fun legBones(
+        hip: Anchor, knee: Anchor, ankle: Anchor, hipAt: Int, kneeAt: Int, ankleAt: Int,
+        p: FloatArray, handedness: Float, thigh: Matrix, shin: Matrix
+    ) {
+        if (!segmentMatrix(hip, knee, hipAt, kneeAt, p, handedness, thigh, pelvisInverse) &&
+            !segmentMatrix(hip, ankle, hipAt, ankleAt, p, handedness, thigh, pelvisInverse)) {
+            thigh.set(pelvisMatrix)
+        }
+        if (!segmentMatrix(knee, ankle, kneeAt, ankleAt, p, handedness, shin, pelvisInverse)) shin.set(thigh)
+    }
+
+    /**
+     * Sets [pelvisMatrix] and [pelvisInverse] for a pair of trousers. Returns the transform's
+     * handedness, as [computeTorso] does, or 0 if it is unusable.
+     *
+     * Three points, as M3's torso has: the garment's hip anchors go onto the wearer's hips, and
+     * the point one garment leg length below the anchors' midpoint goes onto the point one of the
+     * wearer's leg lengths below the hips'. So the hips' spacing sets the scale across, the legs
+     * set it down, and the waistband and seat stay in proportion with the legs drawn below them.
+     * "Below" is square to the hip line, on the image's lower side.
+     *
+     * The wearer's leg length is the mean of the legs in sight: hip to knee to ankle; hip to ankle
+     * with the knee out of sight; or hip to knee, scaled up by the garment's own leg-to-thigh
+     * proportion, with the ankle out of sight. With no leg in sight, the hips' spacing sets the
+     * scale both ways. Along the leg rather than straight hip to ankle, so that bending the knees
+     * does not shorten the waistband and seat.
+     */
+    private fun computePelvis(p: FloatArray, t: TrouserRender): Float {
+        val lx = viewX(p, LEFT_HIP)
+        val ly = viewY(p, LEFT_HIP)
+        val rx = viewX(p, RIGHT_HIP)
+        val ry = viewY(p, RIGHT_HIP)
+        val span = hypot(rx - lx, ry - ly)
+        if (span < 1f || t.hipSpan < 1f) return 0f
+
+        var total = 0f
+        var legs = 0
+        for (side in 0..1) {
+            val hipAt = if (side == 0) LEFT_HIP else RIGHT_HIP
+            val kneeAt = if (side == 0) LEFT_KNEE else RIGHT_KNEE
+            val ankleAt = if (side == 0) LEFT_ANKLE else RIGHT_ANKLE
+            val hx = viewX(p, hipAt)
+            val hy = viewY(p, hipAt)
+            val kneeSeen = visible(p, kneeAt)
+            val ankleSeen = visible(p, ankleAt)
+            val kx = viewX(p, kneeAt)
+            val ky = viewY(p, kneeAt)
+            total += when {
+                kneeSeen && ankleSeen -> hypot(kx - hx, ky - hy) + hypot(viewX(p, ankleAt) - kx, viewY(p, ankleAt) - ky)
+                ankleSeen -> hypot(viewX(p, ankleAt) - hx, viewY(p, ankleAt) - hy)
+                kneeSeen -> hypot(kx - hx, ky - hy) * t.legPerThigh[side]
+                else -> continue
+            }
+            legs++
+        }
+        val length = if (legs > 0) total / legs else t.legLength * span / t.hipSpan
+
+        // Square to the hip line, (-dy, dx) / |d|, turned to point down the image.
+        val ax = t.rightHip.x - t.leftHip.x
+        val ay = t.rightHip.y - t.leftHip.y
+        val artDown = if (ax >= 0f) 1f else -1f
+        src[0] = t.leftHip.x; src[1] = t.leftHip.y
+        src[2] = t.rightHip.x; src[3] = t.rightHip.y
+        src[4] = (t.leftHip.x + t.rightHip.x) / 2f - artDown * ay / t.hipSpan * t.legLength
+        src[5] = (t.leftHip.y + t.rightHip.y) / 2f + artDown * ax / t.hipSpan * t.legLength
+
+        val viewDown = if (rx - lx >= 0f) 1f else -1f
+        dst[0] = lx; dst[1] = ly
+        dst[2] = rx; dst[3] = ry
+        dst[4] = (lx + rx) / 2f - viewDown * (ry - ly) / span * length
+        dst[5] = (ly + ry) / 2f + viewDown * (rx - lx) / span * length
+
+        if (!pelvisMatrix.setPolyToPoly(src, 0, dst, 0, 3)) return 0f
+        if (!pelvisMatrix.invert(pelvisInverse)) return 0f
+
+        pelvisMatrix.getValues(matrixValues)
+        val det = matrixValues[Matrix.MSCALE_X] * matrixValues[Matrix.MSCALE_Y] -
+            matrixValues[Matrix.MSKEW_X] * matrixValues[Matrix.MSKEW_Y]
+        return if (det >= 0f) 1f else -1f
+    }
+
+    /**
      * Sets [MeshRender.easeAmount] so that, row by row, the garment's body is as wide as the
      * wearer's torso - measured live by [BodyWidthMeter] - times the garment's fit allowance.
      *
@@ -781,7 +1282,7 @@ class OverlayView @JvmOverloads constructor(
      * last fit rather than jumping. Requires [computeTorso] to have run this frame.
      */
     private fun fitToBody(m: MeshRender) {
-        if (fitMode == FitMode.OFF) {
+        if (topFitMode == FitMode.OFF) {
             m.easeAmount.fill(0f)
             fittedEase = 0f
             return
@@ -822,7 +1323,7 @@ class OverlayView @JvmOverloads constructor(
         val rowScale = hypot(matrixValues[Matrix.MSCALE_X], matrixValues[Matrix.MSKEW_Y])
         if (rowScale <= 0f) return
 
-        if (fitMode == FitMode.CHEST) {
+        if (topFitMode == FitMode.CHEST) {
             fitToChest(m, rowScale)
             return
         }
@@ -868,9 +1369,11 @@ class OverlayView @JvmOverloads constructor(
     /**
      * The wearer's torso width at height [t], interpolated between the nearest measured levels
      * either side, or the nearest one beyond the measured range; NaN if none is measured.
+     * [positions] says where each entry of [widths] was measured: the torso's levels unless given,
+     * or [BodyWidthMeter.LEG_SAMPLES] for a leg.
      */
-    private fun widthAt(widths: FloatArray, t: Float): Float {
-        val levels = BodyWidthMeter.LEVELS
+    private fun widthAt(widths: FloatArray, t: Float, positions: FloatArray = BodyWidthMeter.LEVELS): Float {
+        val levels = positions
         var below = -1
         var above = -1
         for (k in levels.indices) {
@@ -1049,7 +1552,9 @@ class OverlayView @JvmOverloads constructor(
 
     /**
      * Builds the transform for one limb, from its anchors [a0] -> [a1] on the artwork to its
-     * landmarks [from] -> [to] on the body. Returns false when either is not usable.
+     * landmarks [from] -> [to] on the body. Returns false when either is not usable. [parentInverse]
+     * is the inverse of the transform the limb hangs from: the torso's for a sleeve, the pelvis's
+     * for a trouser leg.
      *
      * Length follows the limb, width follows the body. Along the axis from pivot to far end, the
      * part stretches to the wearer's actual segment length. Across it, the part scales with the
@@ -1063,7 +1568,8 @@ class OverlayView @JvmOverloads constructor(
      * checked before reaching a phone. Change the two together.
      */
     private fun segmentMatrix(
-        a0: Anchor?, a1: Anchor?, from: Int, to: Int, p: FloatArray, handedness: Float, out: Matrix
+        a0: Anchor?, a1: Anchor?, from: Int, to: Int, p: FloatArray, handedness: Float, out: Matrix,
+        parentInverse: Matrix = torsoInverse
     ): Boolean {
         if (a0 == null || a1 == null) return false
         if (!visible(p, from) || !visible(p, to)) return false
@@ -1085,7 +1591,7 @@ class OverlayView @JvmOverloads constructor(
 
         vector[0] = dx
         vector[1] = dy
-        torsoInverse.mapVectors(vector)
+        parentInverse.mapVectors(vector)
         val inverseLength = hypot(vector[0], vector[1])
         if (inverseLength < 1e-6f) return false
         val widthScale = 1f / inverseLength
@@ -1153,6 +1659,20 @@ class OverlayView @JvmOverloads constructor(
                 if (p + 3 >= a.size || a[p].isNaN()) continue
                 canvas.drawLine(a[p] * sx + mapping[1], a[p + 1] * sy + mapping[2],
                     a[p + 2] * sx + mapping[1], a[p + 3] * sy + mapping[2], measuredPaint)
+            }
+        }
+    }
+
+    /** Draws each leg measurement made this frame as a line across the leg, edge to edge. */
+    private fun drawLegWidths(canvas: Canvas, legs: FloatArray) {
+        val sx = imageWidth * mapping[0]
+        val sy = imageHeight * mapping[0]
+        for (side in 0..1) {
+            for (i in BodyWidthMeter.LEG_SAMPLES.indices) {
+                val p = side * BodyWidthMeter.LEG_STRIDE + i * BodyWidthMeter.LEG_SAMPLE_STRIDE + 2
+                if (p + 3 >= legs.size || legs[p].isNaN()) continue
+                canvas.drawLine(legs[p] * sx + mapping[1], legs[p + 1] * sy + mapping[2],
+                    legs[p + 2] * sx + mapping[1], legs[p + 3] * sy + mapping[2], measuredPaint)
             }
         }
     }

@@ -134,7 +134,7 @@ class GarmentMesh(garment: Garment) {
             return cell
         }
 
-        private fun cells(length: Int, cell: Float) = max(1, (length / cell).roundToInt())
+        internal fun cells(length: Int, cell: Float) = max(1, (length / cell).roundToInt())
 
         /** See [torsoWidth]: the narrowing from one row to the next that marks the hem. */
         const val HEM_DROP = 0.1f
@@ -188,7 +188,7 @@ class GarmentMesh(garment: Garment) {
          */
         const val BODY_SIDE = 0.3f
 
-        private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+        internal fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
             val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
             return t * t * (3f - 2f * t)
         }

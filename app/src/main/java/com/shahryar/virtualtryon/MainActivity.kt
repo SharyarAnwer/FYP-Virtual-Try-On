@@ -76,6 +76,18 @@ class MainActivity : AppCompatActivity() {
 
     /** Touched only on [analysisExecutor], which is single-threaded, so access is serialised. */
     private var poseDetector: PoseDetector? = null
+
+    /** Face Mesh, created the first time glasses are worn. Analysis thread only. */
+    private var faceTracker: FaceTracker? = null
+
+    /** Whether glasses are worn (M5): Face Mesh runs only then. */
+    @Volatile private var glassesOn = false
+
+    /** The pairs the Glasses button steps through after "off", from the glasses catalog. */
+    private var glassesPairs: List<GlassesPair> = emptyList()
+
+    /** Which of [glassesPairs] is worn, -1 for none. With no catalog, 0 is the built-in pair. UI thread only. */
+    private var glassesIndex = -1
     private var sourceBitmap: Bitmap? = null
     private var uprightBitmap: Bitmap? = null
     private var uprightCanvas: Canvas? = null
@@ -103,11 +115,18 @@ class MainActivity : AppCompatActivity() {
      */
     private var requestedMasks = true
 
-    private var garments: List<Garment> = emptyList()
+    /** The catalog's upper-body garments, which the Top button steps through. */
+    private var tops: List<Garment> = emptyList()
+
+    /** The catalog's lower-body garments, which the Bottom button steps through (M4). */
+    private var bottoms: List<Garment> = emptyList()
     private val garmentLayers = mutableMapOf<String, GarmentLayers>()
 
-    /** Index into [garments]; -1 shows no garment. */
-    private var selectedGarment = -1
+    /** Index into [tops]; -1 wears no top. */
+    private var selectedTop = -1
+
+    /** Index into [bottoms]; -1 wears no bottom. */
+    private var selectedBottom = -1
 
     @Volatile private var garmentCount = 0
     @Volatile private var activeDelegate = "loading"
@@ -153,15 +172,45 @@ class MainActivity : AppCompatActivity() {
         binding.switchButton.setOnClickListener { toggleLens() }
         binding.delegateButton.setOnClickListener { toggleDelegate() }
         binding.maskButton.setOnClickListener { toggleMasks() }
-        binding.fitButton.setOnClickListener {
-            val modes = OverlayView.FitMode.values()
-            binding.overlayView.fitMode = modes[(binding.overlayView.fitMode.ordinal + 1) % modes.size]
-            updateFitButton()
+        val modes = OverlayView.FitMode.values()
+        binding.topFitButton.setOnClickListener {
+            binding.overlayView.topFitMode = modes[(binding.overlayView.topFitMode.ordinal + 1) % modes.size]
+            updateFitButtons()
         }
-        binding.garmentButton.setOnClickListener { cycleGarment() }
+        binding.bottomFitButton.setOnClickListener {
+            binding.overlayView.bottomFitMode = modes[(binding.overlayView.bottomFitMode.ordinal + 1) % modes.size]
+            updateFitButtons()
+        }
+        binding.topButton.setOnClickListener {
+            if (tops.isEmpty()) return@setOnClickListener
+            selectedTop = if (selectedTop + 1 >= tops.size) -1 else selectedTop + 1
+            updateGarmentButtons()
+            wear(OverlayView.Slot.TOP)
+        }
+        binding.bottomButton.setOnClickListener {
+            if (bottoms.isEmpty()) return@setOnClickListener
+            selectedBottom = if (selectedBottom + 1 >= bottoms.size) -1 else selectedBottom + 1
+            updateGarmentButtons()
+            wear(OverlayView.Slot.BOTTOM)
+        }
         binding.skeletonButton.setOnClickListener {
             binding.overlayView.showSkeleton = !binding.overlayView.showSkeleton
             updateSkeletonButton()
+        }
+        // A tap on the picture hides the stats and every button, for a clear look at the garments,
+        // and the next tap brings them back. The buttons sit above the overlay, so a tap on one
+        // still reaches it; hidden ones take no taps.
+        glassesPairs = GlassesShape.catalog(this)
+        binding.glassesButton.setOnClickListener {
+            val count = maxOf(glassesPairs.size, 1)
+            glassesIndex = if (glassesIndex + 1 >= count) -1 else glassesIndex + 1
+            binding.overlayView.glassesPair = glassesPairs.getOrNull(glassesIndex)
+            glassesOn = glassesIndex >= 0
+            updateGlassesButton()
+        }
+        binding.overlayView.setOnClickListener {
+            binding.topBar.visibility =
+                if (binding.topBar.visibility == View.VISIBLE) View.INVISIBLE else View.VISIBLE
         }
         binding.grantButton.setOnClickListener {
             cameraPermissionRequest.launch(Manifest.permission.CAMERA)
@@ -169,8 +218,9 @@ class MainActivity : AppCompatActivity() {
 
         updateDelegateButton()
         updateMaskButton()
-        updateFitButton()
-        updateGarmentButton()
+        updateFitButtons()
+        updateGarmentButtons()
+        updateGlassesButton()
         updateSkeletonButton()
         renderStats(0.0, 0.0, 0, 0)
         loadGarments()
@@ -197,10 +247,11 @@ class MainActivity : AppCompatActivity() {
     private fun loadGarments() {
         analysisExecutor.execute {
             val loaded = GarmentCatalog.load(this)
-            garments = loaded
+            tops = loaded.filter { it.category == "upper_body" }
+            bottoms = loaded.filter { it.category == "lower_body" }
             garmentCount = loaded.size
-            Log.i(TAG, "Garment catalog: ${loaded.size} loaded")
-            runOnUiThread { updateGarmentButton() }
+            Log.i(TAG, "Garment catalog: ${loaded.size} loaded, ${tops.size} tops, ${bottoms.size} bottoms")
+            runOnUiThread { updateGarmentButtons() }
             loaded.forEach { g ->
                 val flag = if (g.isPlaceholder) " [placeholder]" else ""
                 Log.i(TAG, "  ${g.id}: ${g.category}, ${g.colourName}, ${g.gender}, " +
@@ -313,6 +364,8 @@ class MainActivity : AppCompatActivity() {
             poseTracked = !landmarks.isNullOrEmpty()
             binding.overlayView.setBodyWidths(widths)
             binding.overlayView.setArmWidths(if (widths != null) bodyWidth.lastArms else null)
+            binding.overlayView.setLegWidths(bodyWidth.lastLegs)
+            binding.overlayView.setFace(if (glassesOn) trackFace(upright) else null)
             binding.overlayView.setPose(landmarks, upright.width, upright.height)
         } catch (e: Exception) {
             Log.e(TAG, "Frame analysis failed", e)
@@ -353,10 +406,13 @@ class MainActivity : AppCompatActivity() {
         if (now - lastPerfLogAtMs < PERF_LOG_INTERVAL_MS) return
         lastPerfLogAtMs = now
         Log.i(TAG, String.format(Locale.US,
-            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s ease=%.2f pose=%s",
+            "perf fps=%.1f latency=%.1f prep=%.1f infer=%.1f unpack=%.2f measure=%.2f masks=%s width=%d/%d fit=%s/%s ease=%.2f trousers=%.2f face=%.1f glassesDraw=%.1f pose=%s",
             perf.fps, perf.latencyMs, perf.prepMs, perf.inferenceMs, perf.unpackMs, perf.measureMs,
             if (masksActive) "on" else "off", bodyWidth.measuredLevels, BodyWidthMeter.LEVELS.size,
-            binding.overlayView.fitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase, poseTracked))
+            binding.overlayView.topFitMode.name.lowercase(Locale.US),
+            binding.overlayView.bottomFitMode.name.lowercase(Locale.US), binding.overlayView.fittedEase,
+            binding.overlayView.trouserEase, if (glassesOn) perf.faceMs else Double.NaN,
+            if (glassesOn) binding.overlayView.glassesMs else Double.NaN, poseTracked))
     }
 
     /**
@@ -445,21 +501,26 @@ class MainActivity : AppCompatActivity() {
         bindUseCases()
     }
 
+    /** The garment selected for [slot], or null for none. */
+    private fun selected(slot: OverlayView.Slot): Garment? = when (slot) {
+        OverlayView.Slot.TOP -> tops.getOrNull(selectedTop)
+        OverlayView.Slot.BOTTOM -> bottoms.getOrNull(selectedBottom)
+    }
+
     /**
-     * Steps through the catalog: none, then each garment, then back to none.
+     * Puts the garment selected for [slot] on the overlay, or takes it off. The two buttons each
+     * step through their own list - none, then each garment, then back to none - and neither
+     * touches the other's garment.
      *
      * Every layer is decoded on the analysis thread and cached by garment id. Decoding several
      * 512x640 PNGs takes long enough to drop frames if done on the UI thread, and the cache means
-     * switching back to a garment costs nothing the second time.
+     * switching back to a garment costs nothing the second time. A garment still decoding when the
+     * button is pressed again is dropped rather than shown late over the newer choice.
      */
-    private fun cycleGarment() {
-        if (garments.isEmpty()) return
-        selectedGarment = if (selectedGarment + 1 >= garments.size) -1 else selectedGarment + 1
-        updateGarmentButton()
-
-        val chosen = garments.getOrNull(selectedGarment)
+    private fun wear(slot: OverlayView.Slot) {
+        val chosen = selected(slot)
         if (chosen == null) {
-            binding.overlayView.setGarment(null, null)
+            binding.overlayView.setGarment(slot, null, null)
             return
         }
 
@@ -467,7 +528,41 @@ class MainActivity : AppCompatActivity() {
             val layers = garmentLayers.getOrPut(chosen.id) {
                 GarmentCatalog.loadLayers(this, chosen) ?: return@execute
             }
-            runOnUiThread { binding.overlayView.setGarment(layers, chosen) }
+            runOnUiThread {
+                if (selected(slot) == chosen) binding.overlayView.setGarment(slot, layers, chosen)
+            }
+        }
+    }
+
+    /**
+     * Finds the face for the glasses, creating Face Mesh the first time they are worn. Timed apart
+     * from the pose model: it is a second model on every frame, and its cost against the pose
+     * model's eye points is a result for the evaluation chapter (M5). Analysis thread only.
+     */
+    private fun trackFace(upright: Bitmap): FloatArray? {
+        val tracker = faceTracker ?: try {
+            FaceTracker.create(this).also { faceTracker = it }
+        } catch (e: Exception) {
+            Log.e(TAG, "Face Mesh failed to load; glasses switched off", e)
+            glassesOn = false
+            runOnUiThread {
+                glassesIndex = -1
+                updateGlassesButton()
+            }
+            return null
+        }
+        val startNs = System.nanoTime()
+        val points = tracker.detect(upright, SystemClock.uptimeMillis())
+        perf.recordFace((System.nanoTime() - startNs) / 1_000_000.0)
+        return points
+    }
+
+    private fun updateGlassesButton() {
+        // The pair's name, as the garment buttons show the garment's.
+        binding.glassesButton.text = if (glassesIndex < 0) {
+            getString(R.string.glasses_off)
+        } else {
+            glassesPairs.getOrNull(glassesIndex)?.name ?: getString(R.string.glasses_built_in)
         }
     }
 
@@ -477,11 +572,12 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun updateGarmentButton() {
-        val chosen = garments.getOrNull(selectedGarment)
+    private fun updateGarmentButtons() {
         // The garment's name, not its colour: real garments often share a colour.
-        binding.garmentButton.text = chosen?.name ?: getString(R.string.garment_none)
-        binding.garmentButton.isEnabled = garments.isNotEmpty()
+        binding.topButton.text = selected(OverlayView.Slot.TOP)?.name ?: getString(R.string.top_none)
+        binding.topButton.isEnabled = tops.isNotEmpty()
+        binding.bottomButton.text = selected(OverlayView.Slot.BOTTOM)?.name ?: getString(R.string.bottom_none)
+        binding.bottomButton.isEnabled = bottoms.isNotEmpty()
     }
 
     /**
@@ -506,11 +602,17 @@ class MainActivity : AppCompatActivity() {
         loadDetector()
     }
 
-    private fun updateFitButton() {
-        binding.fitButton.setText(when (binding.overlayView.fitMode) {
-            OverlayView.FitMode.CHEST -> R.string.fit_chest
-            OverlayView.FitMode.ROWS -> R.string.fit_rows
-            OverlayView.FitMode.OFF -> R.string.fit_off
+    private fun updateFitButtons() {
+        binding.topFitButton.setText(when (binding.overlayView.topFitMode) {
+            OverlayView.FitMode.CHEST -> R.string.top_fit_chest
+            OverlayView.FitMode.ROWS -> R.string.top_fit_rows
+            OverlayView.FitMode.OFF -> R.string.top_fit_off
+        })
+        // Trousers fit "by the chest" means by the hips; see OverlayView.FitMode.CHEST.
+        binding.bottomFitButton.setText(when (binding.overlayView.bottomFitMode) {
+            OverlayView.FitMode.CHEST -> R.string.bottom_fit_hips
+            OverlayView.FitMode.ROWS -> R.string.bottom_fit_rows
+            OverlayView.FitMode.OFF -> R.string.bottom_fit_off
         })
     }
 
@@ -538,20 +640,24 @@ class MainActivity : AppCompatActivity() {
         val unpack = if (masksActive) String.format(Locale.US, "%8.1f ms", perf.unpackMs) else "     off"
         val measure = if (masksActive) String.format(Locale.US, "%8.1f ms", perf.measureMs) else "     off"
         val width = if (masksActive) "${bodyWidth.measuredLevels}/${BodyWidthMeter.LEVELS.size}" else "off"
+        val face = if (glassesOn) String.format(Locale.US, "%8.1f ms", perf.faceMs) else "     off"
         binding.statsText.text = String.format(
             Locale.US,
             "FPS      %8.1f\nLATENCY  %8.1f ms\n  prep   %8.1f ms\n  infer  %8.1f ms\n" +
-                "  unpack%s\n  measure%s\n" +
+                "  unpack%s\n  measure%s\n  face  %s\n" +
                 "FRAME    %8s\nCAMERA   %8s\nAE LOCK  %8s\nMODEL    %8s\n" +
                 "DELEGATE %8s\nPOSE     %8s\nWIDTH    %8s\nGARMENTS %8d",
-            fps, latencyMs, perf.prepMs, perf.inferenceMs, unpack, measure,
+            fps, latencyMs, perf.prepMs, perf.inferenceMs, unpack, measure, face,
             resolution, lens, aeRange, "lite", activeDelegate, tracking, width, garmentCount
         )
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        analysisExecutor.execute { poseDetector?.close() }
+        analysisExecutor.execute {
+            poseDetector?.close()
+            faceTracker?.close()
+        }
         analysisExecutor.shutdown()
     }
 }

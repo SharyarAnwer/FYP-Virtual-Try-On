@@ -1,13 +1,15 @@
 """
 Turns a garment photo on a plain background into app-ready cut-outs.
 
-    python tools/prepare_garment.py SOURCE --id polo_pink [--views 2] [--height 1024]
+    python tools/prepare_garment.py SOURCE --id polo_pink [--views 2] [--back BACK] [--height 1024]
                                     [--tolerance N] [--out app/src/main/assets/garments/real]
 
 --views 2 means the source holds two views side by side, front on the left and back on the
-right, as many product images do. Each view is written as <id>_front.png / <id>_back.png, on one
-shared canvas size with every view top-aligned and centred, so M5.5 can switch between them
-without the garment jumping.
+right, as many product images do. --back BACK instead gives the back view as a photo of its own,
+taken with the same framing as the front, as the trousers' product images are; each file then
+holds one view. Either way each view is written as <id>_front.png / <id>_back.png, on one shared
+canvas size with every view top-aligned and centred, so M5.5 can switch between them without the
+garment jumping.
 
 Background removal assumes a plain background in one colour, estimated from the image border.
 It keeps only background that is *connected to the border*: white buttons, a white logo or a
@@ -195,11 +197,34 @@ def compose(views, target_height):
     return out
 
 
+def cut_out(source, views, tolerance):
+    """
+    The garment cut out of one photo, with the background colour and tolerance used - both None
+    when the photo was already transparent.
+    """
+    if source.mode in ("RGBA", "LA", "PA") or "transparency" in source.info:
+        rgba = np.asarray(source.convert("RGBA")).copy()
+        keep = largest_pieces(rgba[..., 3] > 128, views)
+        # Keep the soft edge pixels around each kept piece; drop everything else.
+        near = np.asarray(Image.fromarray((keep * 255).astype(np.uint8), "L")
+                          .filter(ImageFilter.MaxFilter(2 * EDGE_BAND + 1))) > 127
+        rgba[..., 3] = np.where(near, rgba[..., 3], 0)
+        return Image.fromarray(rgba, "RGBA"), None, None
+    rgb = np.asarray(source.convert("RGB"), np.float32)
+    bg = background_colour(rgb)
+    if tolerance is None:
+        tolerance = auto_tolerance(colour_distance(rgb, bg))
+    return matte(rgb, bg, tolerance, views), bg, tolerance
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("source")
     ap.add_argument("--id", required=True)
     ap.add_argument("--views", type=int, default=2, choices=(1, 2))
+    ap.add_argument("--back", default=None,
+                    help="the back view as a separate photo with the same framing as the front; "
+                         "each file then holds one view and --views is ignored")
     ap.add_argument("--height", type=int, default=1024)
     ap.add_argument("--tolerance", type=float, default=None,
                     help="RGB distance from the background still counted as background; "
@@ -207,35 +232,26 @@ def main():
     ap.add_argument("--out", default=os.path.join("app", "src", "main", "assets", "garments", "real"))
     args = ap.parse_args()
 
-    source = Image.open(args.source)
-    if source.mode in ("RGBA", "LA", "PA") or "transparency" in source.info:
-        rgba = np.asarray(source.convert("RGBA")).copy()
-        keep = largest_pieces(rgba[..., 3] > 128, args.views)
-        # Keep the soft edge pixels around each kept piece; drop everything else.
-        near = np.asarray(Image.fromarray((keep * 255).astype(np.uint8), "L")
-                          .filter(ImageFilter.MaxFilter(2 * EDGE_BAND + 1))) > 127
-        rgba[..., 3] = np.where(near, rgba[..., 3], 0)
-        cutout = Image.fromarray(rgba, "RGBA")
-        bg = tolerance = None
+    if args.back:
+        cut = [cut_out(Image.open(path), 1, args.tolerance) for path in (args.source, args.back)]
+        views = compose([cutout for cutout, _, _ in cut], args.height)
     else:
-        rgb = np.asarray(source.convert("RGB"), np.float32)
-        bg = background_colour(rgb)
-        tolerance = args.tolerance if args.tolerance is not None else auto_tolerance(colour_distance(rgb, bg))
-        cutout = matte(rgb, bg, tolerance, args.views)
-    views = compose(split_views(cutout, args.views), args.height)
+        cut = [cut_out(Image.open(args.source), args.views, args.tolerance)]
+        views = compose(split_views(cut[0][0], args.views), args.height)
 
     os.makedirs(args.out, exist_ok=True)
-    names = ["front", "back"][:args.views]
+    names = ["front", "back"][:len(views)]
     for name, view in zip(names, views):
         path = os.path.join(args.out, f"{args.id}_{name}.png")
         view.save(path, "PNG")
         coverage = (np.asarray(view.getchannel("A")) > 0).mean()
         print(f"wrote {path}  {view.width}x{view.height}  garment covers {coverage:.0%} of canvas")
-    if bg is None:
-        print("source already transparent: its own alpha used as the matte")
-    else:
-        print(f"background colour estimated as RGB({bg[0]:.0f}, {bg[1]:.0f}, {bg[2]:.0f}), "
-              f"tolerance {tolerance:.0f}")
+    for _, bg, tolerance in cut:
+        if bg is None:
+            print("source already transparent: its own alpha used as the matte")
+        else:
+            print(f"background colour estimated as RGB({bg[0]:.0f}, {bg[1]:.0f}, {bg[2]:.0f}), "
+                  f"tolerance {tolerance:.0f}")
 
 
 if __name__ == "__main__":
