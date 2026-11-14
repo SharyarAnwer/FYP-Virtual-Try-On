@@ -84,8 +84,9 @@ data class GarmentPart(
  * A garment and everything the rest of the project needs to know about it.
  *
  * The schema is wider than the overlay alone requires, on purpose. The overlay needs [anchors]
- * and [parts]; M6 reads [sizes]; M7 reads [colourName], [gender], [category] and
- * [suitableBodyTypes]. Defining it all once means asset files are not rewritten later.
+ * and [parts]; M6 reads [sizes]; M7 reads [colourName], [colourFamily], [gender], [category],
+ * [fitStyle], [suitableBodyTypes], [occasion] and [legShape]. Defining it all once means asset
+ * files are not rewritten later.
  */
 data class Garment(
     val id: String,
@@ -100,6 +101,12 @@ data class Garment(
     val parts: List<GarmentPart>,
     val colourName: String,
     val colourHex: String,
+    /** M7: "neutral", "warm" or "cool", judged by hand; null for the placeholders. */
+    val colourFamily: String? = null,
+    /** M7: "casual", "smart-casual" or "formal", judged by hand; null for the placeholders. */
+    val occasion: String? = null,
+    /** M7, trousers: "tapered", "straight" or "wide", judged by hand; null otherwise. */
+    val legShape: String? = null,
     val gender: String,
     val fitStyle: String,
     val suitableBodyTypes: List<String>,
@@ -331,6 +338,9 @@ object GarmentCatalog {
             parts = parts,
             colourName = colour.getString("name"),
             colourHex = colour.getString("hex"),
+            colourFamily = colour.optString("family").ifEmpty { null },
+            occasion = json.optString("occasion").ifEmpty { null },
+            legShape = json.optString("legShape").ifEmpty { null },
             gender = json.getString("gender"),
             fitStyle = json.getString("fitStyle"),
             suitableBodyTypes = (0 until bodyTypesJson.length()).map { bodyTypesJson.getString(it) },

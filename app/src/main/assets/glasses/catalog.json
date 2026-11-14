@@ -7,7 +7,11 @@
       "file": "sunglasses_khronos.glb",
       "widthMm": 149.8,
       "earFromMm": 131.1,
-      "triangles": 12372
+      "triangles": 12372,
+      "frameShape": "aviator",
+      "frameColour": "silver",
+      "lenses": "sun",
+      "gender": "unisex"
     },
     {
       "id": "black_wood_frames",
@@ -15,7 +19,11 @@
       "file": "black_wood_frames.glb",
       "widthMm": 140.7,
       "earFromMm": 101.1,
-      "triangles": 12500
+      "triangles": 12500,
+      "frameShape": "rectangular",
+      "frameColour": "black",
+      "lenses": "clear",
+      "gender": "unisex"
     },
     {
       "id": "black_violet_frames",
@@ -23,7 +31,11 @@
       "file": "black_violet_frames.glb",
       "widthMm": 135.9,
       "earFromMm": 132.0,
-      "triangles": 12498
+      "triangles": 12498,
+      "frameShape": "rounded-square",
+      "frameColour": "black",
+      "lenses": "clear",
+      "gender": "unisex"
     },
     {
       "id": "brown_round_frames",
@@ -31,7 +43,11 @@
       "file": "brown_round_frames.glb",
       "widthMm": 140.0,
       "earFromMm": 107.8,
-      "triangles": 12402
+      "triangles": 12402,
+      "frameShape": "round",
+      "frameColour": "brown",
+      "lenses": "light-tint",
+      "gender": "unisex"
     },
     {
       "id": "tortoise_cat_eye",
@@ -39,7 +55,11 @@
       "file": "tortoise_cat_eye.glb",
       "widthMm": 140.0,
       "earFromMm": 105.8,
-      "triangles": 12524
+      "triangles": 12524,
+      "frameShape": "cat-eye",
+      "frameColour": "tortoiseshell",
+      "lenses": "sun",
+      "gender": "unisex"
     }
   ]
 }

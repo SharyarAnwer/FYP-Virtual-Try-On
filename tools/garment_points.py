@@ -512,16 +512,42 @@ def common_fields(args, front, back, mask, category):
     }
 
 
-def descriptive_fields(args, front):
-    """What M6 and M7 read: colour, gender, fit, body types and sizes."""
-    return {
-        "colour": {"name": args.name.split()[0].lower(), "hex": dominant_colour(front)},
+# What M7 reads about a garment, and its value when neither the command line nor the garment's
+# existing entry gives one.
+DESCRIPTIVE_DEFAULTS = {
+    "gender": "unisex",
+    "fitStyle": "regular",
+    "suitableBodyTypes": ["slim", "average", "broad"],
+    "occasion": None,
+    "legShape": None,
+}
+
+
+def descriptive_fields(args, front, previous):
+    """
+    What M6 and M7 read: colour, gender, fit, body types, occasion, leg shape and sizes. Each comes
+    from the command line if given there, else from the garment's existing entry - these are
+    judged by hand, so a re-run to fix the anchors must not reset them - else a default. The
+    colour's hex is measured from the photo every time; its family is judged by hand like the rest.
+    """
+    given = {
         "gender": args.gender,
         "fitStyle": args.fit,
-        "suitableBodyTypes": args.body_types.split(","),
-        "sizes": SIZE_BANDS,
-        "placeholder": False,
+        "suitableBodyTypes": args.body_types.split(",") if args.body_types else None,
+        "occasion": args.occasion,
+        "legShape": args.leg_shape,
     }
+    fields = {}
+    for key, default in DESCRIPTIVE_DEFAULTS.items():
+        value = given[key] if given[key] is not None else previous.get(key, default)
+        if value is not None:
+            fields[key] = value
+    colour = {"name": args.name.split()[0].lower(), "hex": dominant_colour(front)}
+    family = args.colour_family or previous.get("colour", {}).get("family")
+    if family:
+        colour["family"] = family
+    fields.update({"colour": colour, "sizes": SIZE_BANDS, "placeholder": False})
+    return fields
 
 
 def r2(p):
@@ -545,9 +571,9 @@ def upper_body(args, front, back, mask):
             for side, pts in (("left", left), ("right", right))
         },
     })
-    entry.update(descriptive_fields(args, front))
-    # The neck opening is marked by hand, not detected, so a re-run must not lose it.
     previous = previous_entry(args.dir, args.id)
+    entry.update(descriptive_fields(args, front, previous))
+    # The neck opening is marked by hand, not detected, so a re-run must not lose it.
     if args.neck:
         entry["neckOpening"] = [{"x": float(x), "y": float(y)}
                                 for x, y in (pair.split(",") for pair in args.neck.split())]
@@ -586,7 +612,7 @@ def lower_body(args, front, back, mask):
                         "hemInner": r2(points["hems"][side]["inner"])}
                  for side in ("left", "right")},
     })
-    entry.update(descriptive_fields(args, front))
+    entry.update(descriptive_fields(args, front, previous_entry(args.dir, args.id)))
     catalog_path = write_catalog(args.dir, entry)
 
     out = os.path.join("tools", f"garment_points_{args.id}.png")
@@ -609,9 +635,13 @@ def main():
     ap.add_argument("--name", required=True)
     ap.add_argument("--category", default="upper_body", choices=("upper_body", "lower_body"),
                     help="upper_body for shirts, lower_body for trousers")
-    ap.add_argument("--gender", default="unisex")
-    ap.add_argument("--fit", default="regular")
-    ap.add_argument("--body-types", default="slim,average,broad")
+    # Judged by hand, so kept from the garment's existing entry when omitted (see descriptive_fields).
+    ap.add_argument("--gender", default=None, help="unisex, male or female")
+    ap.add_argument("--fit", default=None, help="slim, regular or relaxed")
+    ap.add_argument("--body-types", default=None, help='e.g. "slim,average"')
+    ap.add_argument("--occasion", default=None, help="casual, smart-casual or formal")
+    ap.add_argument("--leg-shape", default=None, help="trousers: tapered, straight or wide")
+    ap.add_argument("--colour-family", default=None, help="neutral, warm or cool")
     ap.add_argument("--neck", default=None,
                     help='neck opening polygon on the front photo, "x,y x,y ..." in canvas px. '
                          "Kept from the existing entry when omitted. Shirts only.")
