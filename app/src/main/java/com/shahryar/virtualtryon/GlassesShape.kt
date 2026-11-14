@@ -10,9 +10,21 @@ import kotlin.math.sqrt
 
 /**
  * A pair the app offers, from assets/glasses/catalog.json: its [name] on the Glasses button, its
- * model [asset], and how far behind the lenses' front its arms bend down behind the ears.
+ * model [asset], and how far behind the lenses' front its arms bend down behind the ears. The
+ * rest is for recommending it (M7), judged by hand: its [frameShape] ("aviator", "rectangular",
+ * "rounded-square", "round", "cat-eye"), [frameColour], [lenses] ("sun", "light-tint", "clear")
+ * and [gender]; null where the catalog does not say.
  */
-data class GlassesPair(val id: String, val name: String, val asset: String, val earFromMm: Float)
+data class GlassesPair(
+    val id: String,
+    val name: String,
+    val asset: String,
+    val earFromMm: Float,
+    val frameShape: String? = null,
+    val frameColour: String? = null,
+    val lenses: String? = null,
+    val gender: String = "unisex",
+)
 
 /**
  * A pair of glasses ready for [Glasses3D] to wear: triangles in millimetres in the glasses' own
@@ -101,7 +113,11 @@ class GlassesShape(
             List(list.length()) { i ->
                 val g = list.getJSONObject(i)
                 GlassesPair(g.getString("id"), g.getString("name"), "glasses/" + g.getString("file"),
-                    if (g.isNull("earFromMm")) EAR_FROM_MM else g.getDouble("earFromMm").toFloat())
+                    if (g.isNull("earFromMm")) EAR_FROM_MM else g.getDouble("earFromMm").toFloat(),
+                    frameShape = g.optString("frameShape").ifEmpty { null },
+                    frameColour = g.optString("frameColour").ifEmpty { null },
+                    lenses = g.optString("lenses").ifEmpty { null },
+                    gender = g.optString("gender").ifEmpty { "unisex" })
             }
         } catch (e: Exception) {
             Log.e(TAG, "Glasses catalog $CATALOG could not be read", e)

@@ -15,6 +15,7 @@ import android.util.Log
 import android.util.Range
 import android.view.View
 import androidx.activity.enableEdgeToEdge
+import android.content.Intent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.camera2.interop.Camera2CameraInfo
@@ -64,6 +65,12 @@ class MainActivity : AppCompatActivity() {
          * dropping to 20 buys a 50 ms exposure but leaves no frame-rate margin at all.
          */
         const val TARGET_MIN_FPS = 24
+
+        /** How long a face-shape result, or a stop, stays on screen, ms. */
+        const val PROMPT_RESULT_MS = 8000L
+
+        /** How long a face-shape result shows before the profile screen that asked for it reopens, ms. */
+        const val PROFILE_RETURN_MS = 2500L
     }
 
     private lateinit var binding: ActivityMainBinding
@@ -88,6 +95,34 @@ class MainActivity : AppCompatActivity() {
 
     /** Which of [glassesPairs] is worn, -1 for none. With no catalog, 0 is the built-in pair. UI thread only. */
     private var glassesIndex = -1
+
+    /** Whether the face shape is being measured (M7): Face Mesh runs then too. */
+    @Volatile private var measuringFace = false
+
+    /** Gathers the face-shape frames. Analysis thread only. */
+    private val faceMeter = FaceShapeMeter()
+
+    private lateinit var profileStore: ProfileStore
+
+    /** Hides the face-shape result a while after it is shown. */
+    private val hidePrompt = Runnable { binding.promptText.visibility = View.GONE }
+
+    /** Whether the profile screen asked for this measurement, and so opens again after it. UI thread only. */
+    private var profileAwaitsFace = false
+
+    private val profileScreen = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == ProfileActivity.RESULT_MEASURE_FACE) startMeasuringFace(forProfile = true)
+    }
+
+    private val openProfile = Runnable { profileScreen.launch(Intent(this, ProfileActivity::class.java)) }
+
+    /** The suggestions screen (M7): comes back with what to try on, or asking for a face measurement. */
+    private val suggestionsScreen = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        when (result.resultCode) {
+            RESULT_OK -> result.data?.let(::tryOn)
+            ProfileActivity.RESULT_MEASURE_FACE -> startMeasuringFace(forProfile = true)
+        }
+    }
     private var sourceBitmap: Bitmap? = null
     private var uprightBitmap: Bitmap? = null
     private var uprightCanvas: Canvas? = null
@@ -207,6 +242,19 @@ class MainActivity : AppCompatActivity() {
             binding.overlayView.glassesPair = glassesPairs.getOrNull(glassesIndex)
             glassesOn = glassesIndex >= 0
             updateGlassesButton()
+        }
+        profileStore = ProfileStore(this)
+        binding.profileButton.setOnClickListener { openProfile.run() }
+        binding.suggestionsButton.setOnClickListener {
+            suggestionsScreen.launch(Intent(this, SuggestionsActivity::class.java))
+        }
+        binding.faceShapeButton.setOnClickListener {
+            if (measuringFace) {
+                profileAwaitsFace = false
+                stopMeasuringFace(getString(R.string.face_prompt_stopped))
+            } else {
+                startMeasuringFace()
+            }
         }
         binding.overlayView.setOnClickListener {
             binding.topBar.visibility =
@@ -365,7 +413,9 @@ class MainActivity : AppCompatActivity() {
             binding.overlayView.setBodyWidths(widths)
             binding.overlayView.setArmWidths(if (widths != null) bodyWidth.lastArms else null)
             binding.overlayView.setLegWidths(bodyWidth.lastLegs)
-            binding.overlayView.setFace(if (glassesOn) trackFace(upright) else null)
+            val face = if (glassesOn || measuringFace) trackFace(upright) else null
+            binding.overlayView.setFace(if (glassesOn) face else null)
+            if (measuringFace) measureFaceShape(face, upright.width, upright.height)
             binding.overlayView.setPose(landmarks, upright.width, upright.height)
         } catch (e: Exception) {
             Log.e(TAG, "Frame analysis failed", e)
@@ -502,6 +552,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** The garment selected for [slot], or null for none. */
+    /**
+     * Puts on what the suggestions screen chose (M7): a shirt, trousers, both, or glasses, by
+     * catalog id. Whatever it does not name stays as it was.
+     */
+    private fun tryOn(choice: Intent) {
+        choice.getStringExtra(SuggestionsActivity.EXTRA_TOP)?.let { id ->
+            val i = tops.indexOfFirst { it.id == id }
+            if (i >= 0) {
+                selectedTop = i
+                wear(OverlayView.Slot.TOP)
+            }
+        }
+        choice.getStringExtra(SuggestionsActivity.EXTRA_BOTTOM)?.let { id ->
+            val i = bottoms.indexOfFirst { it.id == id }
+            if (i >= 0) {
+                selectedBottom = i
+                wear(OverlayView.Slot.BOTTOM)
+            }
+        }
+        choice.getStringExtra(SuggestionsActivity.EXTRA_GLASSES)?.let { id ->
+            val i = glassesPairs.indexOfFirst { it.id == id }
+            if (i >= 0) {
+                glassesIndex = i
+                binding.overlayView.glassesPair = glassesPairs[i]
+                glassesOn = true
+                updateGlassesButton()
+            }
+        }
+        updateGarmentButtons()
+    }
+
     private fun selected(slot: OverlayView.Slot): Garment? = when (slot) {
         OverlayView.Slot.TOP -> tops.getOrNull(selectedTop)
         OverlayView.Slot.BOTTOM -> bottoms.getOrNull(selectedBottom)
@@ -543,11 +624,12 @@ class MainActivity : AppCompatActivity() {
         val tracker = faceTracker ?: try {
             FaceTracker.create(this).also { faceTracker = it }
         } catch (e: Exception) {
-            Log.e(TAG, "Face Mesh failed to load; glasses switched off", e)
+            Log.e(TAG, "Face Mesh failed to load; glasses and face measuring switched off", e)
             glassesOn = false
             runOnUiThread {
                 glassesIndex = -1
                 updateGlassesButton()
+                if (measuringFace) stopMeasuringFace(getString(R.string.face_prompt_failed))
             }
             return null
         }
@@ -555,6 +637,73 @@ class MainActivity : AppCompatActivity() {
         val points = tracker.detect(upright, SystemClock.uptimeMillis())
         perf.recordFace((System.nanoTime() - startNs) / 1_000_000.0)
         return points
+    }
+
+    /**
+     * Starts measuring the face shape (M7): Face Mesh runs and [measureFaceShape] takes each frame.
+     * [forProfile] when the profile screen asked: it opens again once the shape is saved.
+     */
+    private fun startMeasuringFace(forProfile: Boolean = false) {
+        analysisExecutor.execute { faceMeter.reset() }
+        profileAwaitsFace = forProfile
+        measuringFace = true
+        binding.faceShapeButton.setText(R.string.face_measure_stop)
+        binding.promptText.removeCallbacks(hidePrompt)
+        showPrompt(getString(R.string.face_prompt_find))
+    }
+
+    /** Stops measuring, showing [message] for a while. UI thread. */
+    private fun stopMeasuringFace(message: String) {
+        measuringFace = false
+        binding.faceShapeButton.setText(R.string.face_measure)
+        showPrompt(message)
+        binding.promptText.removeCallbacks(hidePrompt)
+        binding.promptText.postDelayed(hidePrompt, PROMPT_RESULT_MS)
+    }
+
+    private fun showPrompt(text: String) {
+        binding.promptText.text = text
+        binding.promptText.visibility = View.VISIBLE
+    }
+
+    /**
+     * Adds one frame's [face] to the face-shape measurement and guides the user; when enough
+     * frames are in, saves the shape to the profile and shows it. Analysis thread only.
+     */
+    private fun measureFaceShape(face: FloatArray?, imageWidth: Int, imageHeight: Int) {
+        val used = face != null && faceMeter.add(face, imageWidth, imageHeight)
+        if (faceMeter.done) {
+            val reading = faceMeter.result() ?: return
+            measuringFace = false
+            profileStore.saveFaceReading(reading)
+            val p = reading.proportions
+            Log.i(TAG, String.format(Locale.US, "face shape %s: length %.3f forehead %.3f jaw %.3f jaw angle %.1f",
+                reading.shape.id, p.lengthToWidth, p.foreheadToWidth, p.jawToWidth, p.jawAngleDeg))
+            runOnUiThread {
+                stopMeasuringFace(getString(R.string.face_result, getString(faceShapeName(reading.shape)),
+                    p.lengthToWidth, p.foreheadToWidth, p.jawToWidth, p.jawAngleDeg))
+                // Asked for by the profile screen: back to it, once the result has been seen.
+                if (profileAwaitsFace) {
+                    profileAwaitsFace = false
+                    binding.root.postDelayed(openProfile, PROFILE_RETURN_MS)
+                }
+            }
+            return
+        }
+        val prompt = when {
+            face == null -> getString(R.string.face_prompt_find)
+            !used -> getString(R.string.face_prompt_turn)
+            else -> getString(R.string.face_prompt_progress, faceMeter.count, faceMeter.framesNeeded)
+        }
+        runOnUiThread { if (measuringFace) showPrompt(prompt) }
+    }
+
+    private fun faceShapeName(shape: FaceShape) = when (shape) {
+        FaceShape.OVAL -> R.string.face_shape_oval
+        FaceShape.ROUND -> R.string.face_shape_round
+        FaceShape.SQUARE -> R.string.face_shape_square
+        FaceShape.HEART -> R.string.face_shape_heart
+        FaceShape.OBLONG -> R.string.face_shape_oblong
     }
 
     private fun updateGlassesButton() {

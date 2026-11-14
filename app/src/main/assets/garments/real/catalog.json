@@ -84,7 +84,8 @@
       },
       "colour": {
         "name": "pink",
-        "hex": "#AD4D6B"
+        "hex": "#AD4D6B",
+        "family": "warm"
       },
       "gender": "unisex",
       "fitStyle": "regular",
@@ -166,7 +167,8 @@
           "x": 313.2,
           "y": 52.5
         }
-      ]
+      ],
+      "occasion": "smart-casual"
     },
     {
       "id": "white_shirt",
@@ -251,12 +253,12 @@
       },
       "colour": {
         "name": "white",
-        "hex": "#D3D8D5"
+        "hex": "#D3D8D5",
+        "family": "neutral"
       },
       "gender": "unisex",
-      "fitStyle": "regular",
+      "fitStyle": "relaxed",
       "suitableBodyTypes": [
-        "slim",
         "average",
         "broad"
       ],
@@ -357,7 +359,8 @@
           "x": 543.0,
           "y": 110.0
         }
-      ]
+      ],
+      "occasion": "casual"
     },
     {
       "id": "grey_tee",
@@ -442,7 +445,8 @@
       },
       "colour": {
         "name": "grey",
-        "hex": "#A5A8B6"
+        "hex": "#A5A8B6",
+        "family": "neutral"
       },
       "gender": "unisex",
       "fitStyle": "regular",
@@ -544,7 +548,8 @@
           "x": 346.0,
           "y": 62.0
         }
-      ]
+      ],
+      "occasion": "casual"
     },
     {
       "id": "navy_polo",
@@ -629,7 +634,8 @@
       },
       "colour": {
         "name": "navy",
-        "hex": "#1B2136"
+        "hex": "#1B2136",
+        "family": "neutral"
       },
       "gender": "unisex",
       "fitStyle": "regular",
@@ -711,7 +717,8 @@
           "x": 313.2,
           "y": 52.5
         }
-      ]
+      ],
+      "occasion": "smart-casual"
     },
     {
       "id": "green_polo",
@@ -796,7 +803,8 @@
       },
       "colour": {
         "name": "green",
-        "hex": "#115C3E"
+        "hex": "#115C3E",
+        "family": "cool"
       },
       "gender": "unisex",
       "fitStyle": "regular",
@@ -878,7 +886,8 @@
           "x": 313.2,
           "y": 52.5
         }
-      ]
+      ],
+      "occasion": "smart-casual"
     },
     {
       "id": "yellow_polo",
@@ -963,7 +972,8 @@
       },
       "colour": {
         "name": "yellow",
-        "hex": "#B9B90B"
+        "hex": "#B9B90B",
+        "family": "warm"
       },
       "gender": "unisex",
       "fitStyle": "regular",
@@ -1045,7 +1055,8 @@
           "x": 313.2,
           "y": 52.5
         }
-      ]
+      ],
+      "occasion": "smart-casual"
     },
     {
       "id": "maroon_polo",
@@ -1130,7 +1141,8 @@
       },
       "colour": {
         "name": "maroon",
-        "hex": "#4D0519"
+        "hex": "#4D0519",
+        "family": "warm"
       },
       "gender": "unisex",
       "fitStyle": "regular",
@@ -1212,7 +1224,8 @@
           "x": 313.2,
           "y": 52.5
         }
-      ]
+      ],
+      "occasion": "smart-casual"
     },
     {
       "id": "khaki_chinos",
@@ -1287,7 +1300,8 @@
       },
       "colour": {
         "name": "khaki",
-        "hex": "#B18C5B"
+        "hex": "#B18C5B",
+        "family": "neutral"
       },
       "gender": "male",
       "fitStyle": "regular",
@@ -1331,7 +1345,9 @@
           }
         }
       ],
-      "placeholder": false
+      "placeholder": false,
+      "occasion": "smart-casual",
+      "legShape": "straight"
     },
     {
       "id": "green_work_pants",
@@ -1406,12 +1422,12 @@
       },
       "colour": {
         "name": "green",
-        "hex": "#406664"
+        "hex": "#406664",
+        "family": "cool"
       },
       "gender": "male",
-      "fitStyle": "regular",
+      "fitStyle": "relaxed",
       "suitableBodyTypes": [
-        "slim",
         "average",
         "broad"
       ],
@@ -1450,7 +1466,9 @@
           }
         }
       ],
-      "placeholder": false
+      "placeholder": false,
+      "occasion": "casual",
+      "legShape": "wide"
     },
     {
       "id": "black_slim_trousers",
@@ -1525,14 +1543,14 @@
       },
       "colour": {
         "name": "black",
-        "hex": "#111111"
+        "hex": "#111111",
+        "family": "neutral"
       },
       "gender": "male",
-      "fitStyle": "regular",
+      "fitStyle": "slim",
       "suitableBodyTypes": [
         "slim",
-        "average",
-        "broad"
+        "average"
       ],
       "sizes": [
         {
@@ -1569,7 +1587,9 @@
           }
         }
       ],
-      "placeholder": false
+      "placeholder": false,
+      "occasion": "formal",
+      "legShape": "tapered"
     },
     {
       "id": "black_belted_trousers",
@@ -1644,7 +1664,8 @@
       },
       "colour": {
         "name": "black",
-        "hex": "#161616"
+        "hex": "#161616",
+        "family": "neutral"
       },
       "gender": "male",
       "fitStyle": "regular",
@@ -1688,7 +1709,9 @@
           }
         }
       ],
-      "placeholder": false
+      "placeholder": false,
+      "occasion": "formal",
+      "legShape": "straight"
     }
   ],
   "note": "Real garments, drawn by mesh warping. Written by tools/garment_points.py; anchors are derived from detected garment points, so re-run it after replacing a photo rather than editing anchors by hand."

@@ -703,7 +703,9 @@ def update_catalog(path, entry):
     pairs = [g for g in catalog["glasses"] if g["id"] != entry["id"]]
     for i, g in enumerate(catalog["glasses"]):
         if g["id"] == entry["id"]:
-            pairs.insert(i, entry)
+            # Fields set by hand - frame shape, frame colour, lenses, gender, for M7 - are kept;
+            # the ones this tool measures are replaced.
+            pairs.insert(i, dict(g, **entry))
             break
     else:
         pairs.append(entry)

@@ -109,6 +109,30 @@
                 tools:text="@string/glasses_off" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/suggestionsButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/suggestions_open" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/profileButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/profile_open" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/faceShapeButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/face_measure" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/skeletonButton"
                 style="@style/Widget.Material3.Button.TonalButton"
                 android:layout_width="wrap_content"
@@ -133,6 +157,28 @@
                 tools:text="@string/mask_off" />
         </LinearLayout>
     </FrameLayout>
+
+    <!-- Guidance while the face shape is measured, then its result (M7). Outside the top bar, so
+         tapping the picture to hide the buttons leaves it showing. -->
+    <TextView
+        android:id="@+id/promptText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginBottom="48dp"
+        android:background="#B3000000"
+        android:gravity="center"
+        android:lineSpacingExtra="3dp"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="10dp"
+        android:textColor="#EAF6F7"
+        android:textSize="15sp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        tools:text="Hold still… 12 of 30"
+        tools:visibility="visible" />
 
     <!-- Shown only when the camera permission has not been granted. -->
     <LinearLayout
