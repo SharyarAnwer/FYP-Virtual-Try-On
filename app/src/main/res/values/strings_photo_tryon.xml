@@ -125,12 +125,29 @@
     </string-array>
     <string name="capture_upload">Upload photos from phone</string>
     <string name="capture_upload_title">Choose your photos</string>
-    <string name="capture_upload_steps">Choose 1 to 8 full-body photos of yourself, head to feet, one person in each.
+    <string name="capture_upload_steps">Choose 1 to 8 full-body photos of yourself, head to feet, one person in each: your front, your back, your sides, in any order.
 
-Pick your front photo first, then the others in the order you would turn to your left: 4 photos are front, right side, back, left side; 2 are front and back.
+I sort them by which way you face, and you can check before going on.
 
 Fitted clothes in good light give the best results.</string>
     <string name="capture_upload_choose">Choose photos</string>
     <string name="capture_upload_working">Reading your photos…</string>
     <string name="capture_upload_failed">Those photos could not be read. Try again, or take new ones.</string>
+    <string name="upload_sort_title">Check your photos</string>
+    <string name="upload_sort_working">Sorting your photos by which way you face…</string>
+    <string name="upload_sort_note">Sorted by which way you face. If one is in the wrong place, tap it, then tap where it belongs. ? means I could not tell.</string>
+    <string name="upload_sort_need_front">Put a photo in Front to continue: tap a photo, then tap Front.</string>
+    <string name="upload_sort_continue">Continue</string>
+    <string name="upload_sort_again">Choose again</string>
+    <!-- The eight places on the check screen, by which way the person faces. -->
+    <string-array name="upload_view_names">
+        <item>Front</item>
+        <item>Front, turned</item>
+        <item>Right side</item>
+        <item>Back, turned</item>
+        <item>Back</item>
+        <item>Back, turned</item>
+        <item>Left side</item>
+        <item>Front, turned</item>
+    </string-array>
 </resources>

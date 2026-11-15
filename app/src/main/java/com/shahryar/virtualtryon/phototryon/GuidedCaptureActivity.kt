@@ -343,10 +343,10 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
     }
 
     /**
-     * Makes a capture from photos chosen in the gallery, in the order chosen: the first is the front, the
-     * rest follow round to the wearer's left (see [Photos.viewsFor]). Each is turned upright and made no
-     * bigger than a captured view. There is no eye spacing measured at the phone, so measurements use an
-     * average one, and the profile screen says so.
+     * Makes a capture from photos chosen in the gallery, in any order: each is turned upright, made no
+     * bigger than a captured view and kept under the order it was picked in; [UploadSortActivity] then
+     * sorts them into views by which way the person faces, to be checked. There is no eye spacing measured
+     * at the phone, so measurements use an average one, and the profile screen says so.
      */
     private fun useUploaded(chosen: List<android.net.Uri>) {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
@@ -354,22 +354,24 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
         Toast.makeText(this, R.string.capture_upload_working, Toast.LENGTH_SHORT).show()
         analysisExecutor.execute {
             val saved = try {
-                val views = Photos.viewsFor(chosen.size)
-                for ((uri, view) in chosen.zip(views)) {
-                    val raw = File(dir, "$view.raw")
+                var kept = 0
+                for (uri in chosen) {
+                    val raw = File(dir, "incoming.raw")
                     contentResolver.openInputStream(uri)?.use { input -> raw.outputStream().use { input.copyTo(it) } }
                     val upright = Photos.loadUpright(raw, 1600)
                     raw.delete()
-                    if (upright != null) FileOutputStream(Photos.file(dir, view)).use { upright.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                    if (upright != null) {
+                        FileOutputStream(UploadSortActivity.pickFile(dir, kept++)).use { upright.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+                    }
                 }
-                Photos.usable(dir)
+                kept > 0
             } catch (e: Exception) {
                 Log.e(TAG, "Could not read the chosen photos", e)
                 false
             }
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
-                if (saved) openProfile(dir) else {
+                if (saved) startActivity(Intent(this, UploadSortActivity::class.java).putExtra(UploadSortActivity.EXTRA_DIR, dir.absolutePath)) else {
                     dir.deleteRecursively()
                     Toast.makeText(this, R.string.capture_upload_failed, Toast.LENGTH_LONG).show()
                 }
