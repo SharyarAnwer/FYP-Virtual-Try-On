@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
 }
@@ -18,6 +20,14 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // The Photo Try-On engine's address, read from local.properties (kept out of git, as it holds the
+        // engine's key). The app starts with it; the profile screen can still change it.
+        val localProps = Properties().apply {
+            val file = rootProject.file("local.properties")
+            if (file.exists()) file.inputStream().use { stream -> load(stream) }
+        }
+        buildConfigField("String", "PHOTO_TRYON_ENGINE", "\"${localProps.getProperty("photoTryOnEngine", "")}\"")
     }
 
     buildTypes {
@@ -36,6 +46,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     androidResources {
