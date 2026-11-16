@@ -33,6 +33,18 @@
         android:textSize="11sp"
         tools:text="turn 0°  fill 0.75" />
 
+    <!-- Free poses: ends the capture early, back at the phone. -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/doneButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="40dp"
+        android:minWidth="160dp"
+        android:text="@string/free_done"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
     <!-- Before the capture: the wearer is still at the phone. -->
     <LinearLayout
         android:id="@+id/setupPanel"
@@ -97,6 +109,13 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="18dp"
             android:text="@string/capture_start"
+            android:textSize="18sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/freeButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/capture_free"
             android:textSize="18sp" />
 
         <com.google.android.material.button.MaterialButton

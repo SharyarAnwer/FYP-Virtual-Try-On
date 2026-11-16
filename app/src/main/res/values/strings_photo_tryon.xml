@@ -4,9 +4,13 @@
     <string name="photo_tryon_app_name">Photo Try-On</string>
 
     <!-- Setting up, with the wearer still at the phone -->
-    <string name="capture_setup_title">Eight views, hands-free</string>
-    <string name="capture_setup_steps">1. Stand the phone upright, at about chest height.\n2. Turn the volume up: I will talk you through it.\n3. Tap Start, walk back about three big steps, and face the phone.\n\nI take one photo of your front. Then you turn slowly all the way round, to your left, and I pick out seven more views as you go.</string>
-    <string name="capture_start">Start</string>
+    <string name="capture_setup_title">Photos for your try-on</string>
+    <string name="capture_setup_steps">1. Stand the phone upright, at about chest height.
+2. Turn the volume up: I will talk you through it.
+3. Choose how:
+   • Start: one front photo, then one slow turn to your left.
+   • Free poses: up to eight poses of your own. Stand, arms off your chest, hands out of your pockets, nothing in your hands.</string>
+    <string name="capture_start">Start: front photo and a turn</string>
     <string name="capture_tilt_ok">Phone is upright</string>
     <string name="capture_tilt_back">Phone is leaning back %1$d° — stand it more upright</string>
     <string name="capture_tilt_forward">Phone is leaning forward %1$d° — stand it more upright</string>
@@ -135,7 +139,7 @@ Fitted clothes in good light give the best results.</string>
     <string name="capture_upload_failed">Those photos could not be read. Try again, or take new ones.</string>
     <string name="upload_sort_title">Check your photos</string>
     <string name="upload_sort_working">Sorting your photos by which way you face…</string>
-    <string name="upload_sort_note">Sorted by which way you face. If one is in the wrong place, tap it, then tap where it belongs. ? means I could not tell.</string>
+    <string name="upload_sort_note">Sorted by which way you face. If one is in the wrong place, tap it, then tap where it belongs. ? means I could not tell. A red label is a pose that may dress badly.</string>
     <string name="upload_sort_need_front">Put a photo in Front to continue: tap a photo, then tap Front.</string>
     <string name="upload_sort_continue">Continue</string>
     <string name="upload_sort_again">Choose again</string>
@@ -149,5 +153,39 @@ Fitted clothes in good light give the best results.</string>
         <item>Back, turned</item>
         <item>Left side</item>
         <item>Front, turned</item>
+    </string-array>
+    <string name="capture_free">Free poses</string>
+    <string name="free_done">Done</string>
+    <string name="free_hold">Hold still in this pose for 3 seconds to take the photo.</string>
+    <string name="free_same_pose">Now change to a new pose.</string>
+    <string name="free_taken">Photo %1$d taken. Now change your pose.</string>
+    <string name="free_all_done">That is eight photos. All done. You can come back to the phone.</string>
+    <string name="free_start">Walk back about three big steps. Stand, and pose however you like.</string>
+    <string name="free_no_person">I can\'t see you. Stand in front of the phone.</string>
+    <string name="free_two_people">Only one person in the picture, please.</string>
+    <string name="free_not_standing">Please stand up straight.</string>
+    <string name="free_arms_on_body">Keep your arms by your sides, away from your chest.</string>
+    <string name="free_hands_hidden">Take your hands out of your pockets, and keep them in view.</string>
+    <string name="free_holding">Please put the %1$s down.</string>
+    <string name="check_not_standing">Not standing</string>
+    <string name="check_arms_on_body">Arms on body</string>
+    <string name="check_hands_hidden">Hands hidden</string>
+    <string name="check_holding">Holding a %1$s</string>
+    <string name="check_two_people">Two people</string>
+    <string name="check_cut_off">Body cut off</string>
+    <string name="check_too_far">Too far away</string>
+    <string name="check_no_person">No person found</string>
+    <!-- What a held thing is called out loud: object detector name, then the word to say. -->
+    <string-array name="holdable_names">
+        <item>cell phone|phone</item>
+        <item>handbag|bag</item>
+        <item>backpack|backpack</item>
+        <item>suitcase|suitcase</item>
+        <item>bottle|bottle</item>
+        <item>cup|cup</item>
+        <item>umbrella|umbrella</item>
+        <item>laptop|laptop</item>
+        <item>book|book</item>
+        <item>remote|remote</item>
     </string-array>
 </resources>

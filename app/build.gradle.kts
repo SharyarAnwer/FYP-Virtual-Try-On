@@ -53,6 +53,7 @@ android {
         // MediaPipe memory-maps the model straight out of the APK, which only works if
         // the packager leaves it uncompressed.
         noCompress.add("task")
+        noCompress.add("tflite")
     }
 }
 

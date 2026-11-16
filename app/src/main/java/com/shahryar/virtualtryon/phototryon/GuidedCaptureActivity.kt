@@ -85,6 +85,9 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
 
     private enum class Phase { SETUP, GUIDING, REVIEW }
 
+    /** The guided turn (a front photo, then views picked out of one turn), or poses of the wearer's own. */
+    private enum class Mode { TURN, FREE }
+
     companion object {
         private const val TAG = "VTO-Photo"
 
@@ -147,6 +150,16 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
     private lateinit var audioManager: AudioManager
 
     private val guide = CaptureGuide()
+    private val freeGuide = FreePoseGuide()
+    @Volatile private var mode = Mode.TURN
+
+    // Free poses only, analysis thread: a pose model that tells two people apart, and the object detector,
+    // run every few frames as it is the slower of the two.
+    private var freePose: com.google.mediapipe.tasks.vision.poselandmarker.PoseLandmarker? = null
+    private var spotter: ObjectSpotter? = null
+    private var spotted: List<Spotted> = emptyList()
+    private var freeFrames = 0
+    private var wasAmber = false
     private var poseDetector: PoseDetector? = null
     private var faceTracker: FaceTracker? = null
     private val faceReadings = ArrayList<Float>()
@@ -213,7 +226,9 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
         }
 
         binding.overlay.show(null, "", 0, 0, 0, outline = true)
-        binding.startButton.setOnClickListener { startGuiding() }
+        binding.startButton.setOnClickListener { startGuiding(Mode.TURN) }
+        binding.freeButton.setOnClickListener { startGuiding(Mode.FREE) }
+        binding.doneButton.setOnClickListener { finishFree() }
         binding.retakeButton.setOnClickListener { startGuiding() }
         binding.useButton.setOnClickListener { usePhotos() }
         binding.useLastButton.setOnClickListener { lastCapture()?.let { openProfile(it) } }
@@ -248,6 +263,8 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
         analysisExecutor.execute {
             poseDetector?.close()
             faceTracker?.close()
+            runCatching { freePose?.close() }
+            spotter?.close()
         }
         analysisExecutor.shutdown()
     }
@@ -269,23 +286,28 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
         phase = Phase.SETUP
         binding.setupPanel.visibility = View.VISIBLE
         binding.reviewPanel.visibility = View.GONE
+        binding.doneButton.visibility = View.GONE
         binding.overlay.show(null, "", 0, 0, 0, outline = true)
         showSetupStatus()
     }
 
-    private fun startGuiding() {
+    private fun startGuiding(chosen: Mode = Mode.TURN) {
         if (!hasCameraPermission()) {
             cameraPermission.launch(Manifest.permission.CAMERA)
             return
         }
+        mode = chosen
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val dir = File(getExternalFilesDir(null), "$PHOTOS_DIR/session_$stamp").apply { mkdirs() }
+        val prefix = if (chosen == Mode.FREE) "free" else "session"
+        val dir = File(getExternalFilesDir(null), "$PHOTOS_DIR/${prefix}_$stamp").apply { mkdirs() }
         // The eye spacing measured at the phone goes with the pictures: it is their scale.
         if (!faceIpdMm.isNaN()) {
             File(dir, PhotoAnalyzer.SCALE_FILE).writeText(JSONObject().put(PhotoAnalyzer.SCALE_IPD_MM, faceIpdMm.toDouble()).toString())
         }
         sessionDir = dir
         synchronized(guide) { guide.restart() }
+        synchronized(freeGuide) { freeGuide.restart() }
+        wasAmber = false
         pendingKey = null
         spokenKey = null
         lastCount = 0
@@ -293,9 +315,135 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
         helpSaidAtMs = now
         binding.setupPanel.visibility = View.GONE
         binding.reviewPanel.visibility = View.GONE
+        binding.doneButton.visibility = if (chosen == Mode.FREE) View.VISIBLE else View.GONE
         phase = Phase.GUIDING
-        say(getString(R.string.capture_voice_start), key = null)
+        say(getString(if (chosen == Mode.FREE) R.string.free_start else R.string.capture_voice_start), key = null)
         quietUntilMs = now + 3500
+    }
+
+    // ------------------------------------------------------------------------------ free poses
+
+    /** One frame of free poses, on the analysis thread: the two-person pose model, the object detector, the rules. */
+    private fun analyzeFree(upright: Bitmap) {
+        val pose = freePose ?: twoPersonPose(applicationContext,
+            com.google.mediapipe.tasks.vision.core.RunningMode.VIDEO).also { freePose = it }
+        val reading = pose.detectForVideo(com.google.mediapipe.framework.image.BitmapImageBuilder(upright).build(),
+            SystemClock.uptimeMillis()).reading()
+        if (freeFrames++ % 6 == 0) spotted = (spotter ?: ObjectSpotter.create(applicationContext).also { spotter = it }).spot(upright)
+        if (reading.image != null && freeFrames % LIGHT_EVERY_FRAMES == 0) {
+            reading.image.copyInto(imagePoints)
+            tooDark = faceLuma(upright) < MIN_FACE_LUMA
+        }
+        val g = synchronized(freeGuide) {
+            freeGuide.update(reading.image, reading.world, reading.people, upright.width.toFloat() / upright.height,
+                spotted, tooDark, SystemClock.uptimeMillis())
+        }
+        runOnUiThread { renderFree(g) }
+    }
+
+    private fun renderFree(g: FreeGuidance) {
+        if (phase != Phase.GUIDING || mode != Mode.FREE) return
+        val now = SystemClock.uptimeMillis()
+        val takenBits = (1 shl g.taken) - 1
+        val text = when {
+            g.verdict != null -> problemWords(g.verdict)
+            g.samePose -> getString(R.string.free_same_pose)
+            g.level == Level.NEARLY -> getString(R.string.free_hold)
+            g.count == 0 -> getString(R.string.capture_taking)
+            else -> ""
+        }
+        binding.overlay.show(g.level, text, g.count, takenBits, FreePoseGuide.MAX_PHOTOS, outline = false)
+
+        // Amber: said at once, as it is the instruction to hold - the countdown follows when it is finished.
+        val amber = g.level == Level.NEARLY
+        if (amber && !wasAmber) say(text, key = "hold")
+        wasAmber = amber
+        if (g.count > 0) {
+            if (g.count != lastCount) {
+                lastCount = g.count
+                say(getString(when (g.count) { 3 -> R.string.capture_count_3; 2 -> R.string.capture_count_2; else -> R.string.capture_count_1 }), key = null)
+            }
+            return
+        }
+        lastCount = 0
+        if (g.capture) {
+            takeFreePhoto(g.taken)
+            return
+        }
+        if (amber) return
+
+        val key = g.verdict?.problem?.name ?: if (g.samePose) "same" else return
+        if (key != pendingKey) {
+            pendingKey = key
+            pendingSinceMs = now
+        }
+        if (now < quietUntilMs || now - pendingSinceMs < SETTLE_MS || now - spokenAtMs < MIN_GAP_MS) return
+        if (key == spokenKey && now - spokenAtMs < REPEAT_MS) return
+        say(text, key)
+    }
+
+    /** The words for a broken rule, as said and shown. */
+    private fun problemWords(v: PoseVerdict): String = when (v.problem) {
+        PoseProblem.NO_PERSON -> getString(R.string.free_no_person)
+        PoseProblem.TWO_PEOPLE -> getString(R.string.free_two_people)
+        PoseProblem.MOVE_AWAY -> getString(R.string.capture_move_away)
+        PoseProblem.COME_CLOSER -> getString(R.string.capture_come_closer)
+        PoseProblem.NOT_STANDING -> getString(R.string.free_not_standing)
+        PoseProblem.ARMS_ON_BODY -> getString(R.string.free_arms_on_body)
+        PoseProblem.HANDS_HIDDEN -> getString(R.string.free_hands_hidden)
+        PoseProblem.HOLDING -> getString(R.string.free_holding, heldName(v.detail))
+        PoseProblem.TOO_DARK -> getString(R.string.capture_too_dark)
+    }
+
+    private fun heldName(label: String?): String = resources.getStringArray(R.array.holdable_names)
+        .map { it.split('|') }.firstOrNull { it[0] == label }?.get(1) ?: (label ?: "")
+
+    /** A free pose's photo, full size, kept under the order it was taken in; the view it is in is decided later. */
+    private fun takeFreePhoto(index: Int) {
+        val capture = imageCapture
+        val dir = sessionDir
+        if (capture == null || dir == null) {
+            synchronized(freeGuide) { freeGuide.onCaptureFailed() }
+            return
+        }
+        capture.takePicture(ImageCapture.OutputFileOptions.Builder(UploadSortActivity.pickFile(dir, index)).build(),
+            ContextCompat.getMainExecutor(this), object : ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(output: ImageCapture.OutputFileResults) {
+                    if (isDestroyed || phase != Phase.GUIDING) return
+                    shutter.play(MediaActionSound.SHUTTER_CLICK)
+                    binding.overlay.flash()
+                    val (taken, done) = synchronized(freeGuide) {
+                        freeGuide.onCaptured()
+                        freeGuide.taken to freeGuide.done
+                    }
+                    beeper.progress(taken)
+                    if (done) {
+                        beeper.done()
+                        say(getString(R.string.free_all_done), key = null)
+                        finishFree()
+                    } else {
+                        say(getString(R.string.free_taken, taken), key = "same")
+                        pendingKey = spokenKey
+                        pendingSinceMs = SystemClock.uptimeMillis()
+                        quietUntilMs = pendingSinceMs + AFTER_PHOTO_QUIET_MS / 2
+                    }
+                }
+
+                override fun onError(e: ImageCaptureException) {
+                    Log.e(TAG, "Free pose photo failed", e)
+                    synchronized(freeGuide) { freeGuide.onCaptureFailed() }
+                    if (phase == Phase.GUIDING) say(getString(R.string.capture_failed), key = "failed")
+                }
+            })
+    }
+
+    /** The free poses taken so far go on to be sorted into views and checked, as uploaded photos are. */
+    private fun finishFree() {
+        val dir = sessionDir
+        val taken = synchronized(freeGuide) { freeGuide.taken }
+        showSetup()
+        if (dir == null || taken == 0) return
+        startActivity(Intent(this, UploadSortActivity::class.java).putExtra(UploadSortActivity.EXTRA_DIR, dir.absolutePath))
     }
 
     private fun showReview() {
@@ -416,6 +564,10 @@ class GuidedCaptureActivity : AppCompatActivity(), SensorEventListener, TextToSp
         try {
             if (phase == Phase.SETUP && faceIpdMm.isNaN()) measureFace(toUpright(imageProxy))
             if (phase != Phase.GUIDING) return
+            if (mode == Mode.FREE) {
+                analyzeFree(toUpright(imageProxy))
+                return
+            }
             val upright = toUpright(imageProxy)
             val result = poseDetector?.detect(upright, SystemClock.uptimeMillis())
             val points = result?.landmarks()?.firstOrNull()

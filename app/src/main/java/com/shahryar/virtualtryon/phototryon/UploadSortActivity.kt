@@ -43,6 +43,8 @@ class UploadSortActivity : AppCompatActivity() {
     private var picks: List<File> = emptyList()
     private var thumbs: List<Bitmap?> = emptyList()
     private var unsure: Set<Int> = emptySet()
+    /** For each photo, the first pose rule it breaks, or null. */
+    private var problems: List<PoseVerdict?> = emptyList()
     private val cells = ArrayList<FrameLayout>()
     private var selected = -1
 
@@ -61,11 +63,13 @@ class UploadSortActivity : AppCompatActivity() {
 
         worker.execute {
             val directions = UploadSorter(applicationContext).directions(picks)
+            val checks = PhotoChecker(applicationContext).check(picks)
             val small = picks.map { Photos.loadUpright(it, 500) }
             val views = UploadSorter.assign(directions.map { it.angleDeg })
             runOnUiThread {
                 if (isDestroyed) return@runOnUiThread
                 thumbs = small
+                problems = checks
                 unsure = directions.indices.filter { directions[it].angleDeg == null }.toSet()
                 for ((photo, view) in views.withIndex()) if (view >= 0) placed[view] = photo
                 binding.sortNote.setText(R.string.upload_sort_note)
@@ -101,6 +105,14 @@ class UploadSortActivity : AppCompatActivity() {
                 background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(CaptureOverlayView.AMBER) }
             }, FrameLayout.LayoutParams((28 * resources.displayMetrics.density).roundToInt(),
                 (28 * resources.displayMetrics.density).roundToInt(), Gravity.TOP or Gravity.END))
+            // A pose that may dress badly: what is wrong with it, in red across the top.
+            cell.addView(TextView(this).apply {
+                setTextColor(Color.WHITE)
+                textSize = 11f
+                setBackgroundColor(0xE6C62828.toInt())
+                gravity = Gravity.CENTER
+                visibility = android.view.View.GONE
+            }, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP))
             cell.setOnClickListener { tapped(view) }
             val row = if (view < CaptureGuide.VIEWS / 2) binding.rowTop else binding.rowBottom
             row.addView(cell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f).apply { setMargins(margin, margin, margin, margin) })
@@ -126,6 +138,11 @@ class UploadSortActivity : AppCompatActivity() {
             val photo = placed[view]
             (cell.getChildAt(0) as ImageView).setImageBitmap(if (photo >= 0) thumbs.getOrNull(photo) else null)
             cell.getChildAt(2).visibility = if (photo >= 0 && photo in unsure) android.view.View.VISIBLE else android.view.View.GONE
+            val problem = if (photo >= 0) problems.getOrNull(photo) else null
+            (cell.getChildAt(3) as TextView).apply {
+                visibility = if (problem != null) android.view.View.VISIBLE else android.view.View.GONE
+                if (problem != null) text = shortWords(problem)
+            }
             cell.background = GradientDrawable().apply {
                 setColor(0xFF1B2126.toInt())
                 if (view == selected) setStroke((4 * resources.displayMetrics.density).roundToInt(), CaptureOverlayView.GREEN)
@@ -134,6 +151,20 @@ class UploadSortActivity : AppCompatActivity() {
         val haveFront = placed[0] >= 0
         binding.continueButton.isEnabled = haveFront && thumbs.isNotEmpty()
         if (thumbs.isNotEmpty() && !haveFront) binding.sortNote.setText(R.string.upload_sort_need_front)
+    }
+
+    /** A broken rule in two or three words, for the red label on a photo. */
+    private fun shortWords(v: PoseVerdict): String = when (v.problem) {
+        PoseProblem.NO_PERSON -> getString(R.string.check_no_person)
+        PoseProblem.TWO_PEOPLE -> getString(R.string.check_two_people)
+        PoseProblem.MOVE_AWAY -> getString(R.string.check_cut_off)
+        PoseProblem.COME_CLOSER -> getString(R.string.check_too_far)
+        PoseProblem.NOT_STANDING -> getString(R.string.check_not_standing)
+        PoseProblem.ARMS_ON_BODY -> getString(R.string.check_arms_on_body)
+        PoseProblem.HANDS_HIDDEN -> getString(R.string.check_hands_hidden)
+        PoseProblem.HOLDING -> getString(R.string.check_holding, resources.getStringArray(R.array.holdable_names)
+            .map { it.split('|') }.firstOrNull { it[0] == v.detail }?.get(1) ?: (v.detail ?: ""))
+        PoseProblem.TOO_DARK -> getString(R.string.capture_too_dark)
     }
 
     /** Each photo renamed to the view it is in; then on to the profile. */

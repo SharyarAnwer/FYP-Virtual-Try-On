@@ -1,7 +1,10 @@
 """The Photo Try-On engine on Modal: dresses a capture's eight views.
 
-Leffa dresses seven of them - the front, the two sides and the four in between. FASHN VTON v1.5 dresses
-the straight back (view 4), which Leffa drew wrong in every test.
+FASHN VTON v1.5 dresses all eight, each photo first cropped to the person so the model spends its pixels on
+them and not the room. In the side-by-side test on the same eight photos, FASHN drew the right shirt in the
+right colour on every view, where Leffa got the colour wrong on two and never managed the straight back.
+
+Leffa is kept: set MODEL to "leffa" to go back to Leffa for seven views and FASHN for the straight back.
 
 Once, to put Leffa's trained files into a Modal volume:
     python -m modal run engine.py::fetch_weights
@@ -31,6 +34,7 @@ ORDER = [0, 4, 2, 6, 1, 5, 3, 7]          # front, back, the sides, then the fou
 BACK = {3, 4, 5}                           # these show the back: they get the garments' back pictures
 FASHN_VIEW = 4                             # the straight back
 GPUS = ["L4", "A10G"]                      # whichever is free first
+MODEL = "fashn"                            # "fashn": FASHN for all views. "leffa": Leffa, and FASHN for the straight back.
 
 leffa_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -193,7 +197,54 @@ class LeffaDresser:
         return out.getvalue()
 
 
-@app.cls(image=fashn_image, gpu=GPUS, timeout=600, scaledown_window=120, max_containers=1)
+@app.cls(image=leffa_image, volumes={"/ckpts": weights}, cpu=2.0, memory=4096, timeout=300, scaledown_window=300,
+         max_containers=8)
+class Framer:
+    """Crops a photo to the person, on an ordinary CPU: Leffa's body-part model finds them, nothing else of Leffa runs."""
+
+    @modal.enter()
+    def load(self):
+        import sys
+        os.chdir("/leffa")
+        sys.path.insert(0, "/leffa")
+        from preprocess.humanparsing.run_parsing import Parsing
+        self.parsing = Parsing(atr_path="/ckpts/humanparsing/parsing_atr.onnx", lip_path="/ckpts/humanparsing/parsing_lip.onnx")
+
+    @modal.method()
+    def frame(self, person: bytes) -> bytes:
+        """The person filling a 768 x 1024 picture, with the margin the dressed views have."""
+        import numpy as np
+        from PIL import Image, ImageOps
+        from leffa_utils.utils import resize_and_center
+        photo = ImageOps.exif_transpose(Image.open(io.BytesIO(person))).convert("RGB")
+        w, h = photo.size
+        scale = min(384 / w, 512 / h)
+        ox, oy = (384 - w * scale) / 2, (512 - h * scale) / 2
+        parse, _ = self.parsing(resize_and_center(photo, 768, 1024).resize((384, 512)))
+        body = np.array(parse.resize((384, 512), Image.NEAREST)) != 0
+        ys, xs = np.where(body)
+        if len(ys) < 500:
+            out_picture = resize_and_center(photo, 768, 1024).convert("RGB")
+        else:
+            x0, x1 = (xs.min() - ox) / scale, (xs.max() - ox) / scale
+            y0, y1 = (ys.min() - oy) / scale, (ys.max() - oy) / scale
+            height = (y1 - y0) * 1.12
+            width = max(height * 0.75, (x1 - x0) * 1.1)
+            height = width / 0.75
+            cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+            box = (int(cx - width / 2), int(cy - height / 2), int(cx + width / 2), int(cy + height / 2))
+            # Past the photo's edge the nearest row and column of the photo are repeated, not white: a white band
+            # showed where feet were near the bottom edge.
+            arr = np.asarray(photo)
+            ys_i = np.clip(np.arange(box[1], box[3]), 0, h - 1)
+            xs_i = np.clip(np.arange(box[0], box[2]), 0, w - 1)
+            out_picture = Image.fromarray(arr[ys_i][:, xs_i]).resize((768, 1024), Image.LANCZOS)
+        out = io.BytesIO()
+        out_picture.save(out, "JPEG", quality=95)
+        return out.getvalue()
+
+
+@app.cls(image=fashn_image, gpu=GPUS, timeout=600, scaledown_window=120, max_containers=8)
 class FashnDresser:
     @modal.enter()
     def load(self):
@@ -258,9 +309,10 @@ def web():
                 face = "back" if index in BACK else "front"
                 try:
                     photo = person[view]
-                    if index == FASHN_VIEW:
-                        photo = LeffaDresser().frame.remote(photo)
-                    dresser = FashnDresser() if index == FASHN_VIEW else LeffaDresser()
+                    by_fashn = MODEL == "fashn" or index == FASHN_VIEW
+                    if by_fashn:
+                        photo = Framer().frame.remote(photo)
+                    dresser = FashnDresser() if by_fashn else LeffaDresser()
                     picture = dresser.dress.remote(photo,
                                                    (top.get(face) or top.get("front")) if top else None,
                                                    (bottom.get(face) or bottom.get("front")) if bottom else None)
@@ -293,7 +345,7 @@ def web():
 
     @api.get("/k/{k}/health")
     def health():
-        return {"ok": True, "views": len(VIEWS), "model": "Leffa, FASHN VTON v1.5 for the straight back",
+        return {"ok": True, "views": len(VIEWS), "model": "FASHN VTON v1.5" if MODEL == "fashn" else "Leffa, FASHN VTON v1.5 for the straight back",
                 "busy": any(j["state"] == "running" for j in jobs.values()),
                 "garments": {g: sorted(f) for g, f in garments.items()}}
 
