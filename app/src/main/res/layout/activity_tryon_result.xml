@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photo Try-On, stage 5: an outfit on the wearer, as a turntable of dressed photos that fills in as they arrive. -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/resultRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    android:orientation="vertical">
+
+    <TextView
+        android:id="@+id/resultTitle"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="36dp"
+        android:textColor="@color/white"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        tools:text="Navy Polo + Khaki Chinos" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingVertical="6dp">
+
+        <ProgressBar
+            android:id="@+id/resultWorking"
+            style="?android:attr/progressBarStyleSmall"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginEnd="10dp" />
+
+        <TextView
+            android:id="@+id/resultStatus"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:textColor="#E6FFFFFF"
+            android:textSize="14sp"
+            tools:text="Dressing view 3 of 8…" />
+    </LinearLayout>
+
+    <!-- Two pictures, one over the other, so one view can fade into the next. -->
+    <FrameLayout
+        android:id="@+id/turntable"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <ImageView
+            android:id="@+id/pictureBelow"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:importantForAccessibility="no"
+            android:scaleType="fitCenter" />
+
+        <ImageView
+            android:id="@+id/pictureAbove"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:importantForAccessibility="no"
+            android:scaleType="fitCenter" />
+
+        <TextView
+            android:id="@+id/turnHint"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="12dp"
+            android:background="#99000000"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="6dp"
+            android:text="@string/result_hint"
+            android:textColor="@color/white"
+            android:textSize="13sp"
+            android:visibility="gone" />
+    </FrameLayout>
+
+    <!-- One dot per view, added in code: which have arrived, and which is showing. -->
+    <LinearLayout
+        android:id="@+id/dots"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingTop="10dp"
+        android:paddingBottom="22dp" />
+</LinearLayout>

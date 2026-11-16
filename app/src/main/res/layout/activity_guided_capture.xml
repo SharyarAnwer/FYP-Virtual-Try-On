@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photo Try-On, stage 1: the guided, hands-free capture of eight views. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/captureRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/black"
+    android:keepScreenOn="true">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <com.shahryar.virtualtryon.phototryon.CaptureOverlayView
+        android:id="@+id/overlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Small readout for testing: the measured turn and how much of the frame the body fills. -->
+    <TextView
+        android:id="@+id/debugText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="28dp"
+        android:background="#99000000"
+        android:fontFamily="monospace"
+        android:paddingHorizontal="8dp"
+        android:paddingVertical="4dp"
+        android:textColor="#EAF6F7"
+        android:textSize="11sp"
+        tools:text="turn 0°  fill 0.75" />
+
+    <!-- Free poses: ends the capture early, back at the phone. -->
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/doneButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="40dp"
+        android:minWidth="160dp"
+        android:text="@string/free_done"
+        android:textSize="18sp"
+        android:visibility="gone" />
+
+    <!-- Before the capture: the wearer is still at the phone. -->
+    <LinearLayout
+        android:id="@+id/setupPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginHorizontal="24dp"
+        android:background="#F0101418"
+        android:orientation="vertical"
+        android:padding="24dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/capture_setup_title"
+            android:textColor="@color/white"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:lineSpacingExtra="4dp"
+            android:text="@string/capture_setup_steps"
+            android:textColor="#E6FFFFFF"
+            android:textSize="15sp" />
+
+        <TextView
+            android:id="@+id/tiltStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:text="@string/capture_tilt_ok"
+            tools:textColor="#43A047" />
+
+        <TextView
+            android:id="@+id/volumeStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:text="@string/capture_volume_ok"
+            tools:textColor="#43A047" />
+
+        <TextView
+            android:id="@+id/faceStatus"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            tools:text="@string/capture_face_measured"
+            tools:textColor="#43A047" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/startButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:text="@string/capture_start"
+            android:textSize="18sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/freeButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/capture_free"
+            android:textSize="18sp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/uploadButton"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/capture_upload" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/useLastButton"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/capture_use_last"
+            android:visibility="gone" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/backButton"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/capture_back" />
+    </LinearLayout>
+
+    <!-- After the capture: the eight views to look over. -->
+    <LinearLayout
+        android:id="@+id/reviewPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/black"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
+            android:text="@string/capture_review_title"
+            android:textColor="@color/white"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <!-- Two rows of four pictures, added in code. -->
+        <LinearLayout
+            android:id="@+id/reviewRowTop"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="12dp"
+            android:layout_weight="1"
+            android:baselineAligned="false"
+            android:orientation="horizontal" />
+
+        <LinearLayout
+            android:id="@+id/reviewRowBottom"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:baselineAligned="false"
+            android:orientation="horizontal" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/retakeButton"
+                style="@style/Widget.Material3.Button.TonalButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:text="@string/capture_retake" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/useButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:text="@string/capture_use" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

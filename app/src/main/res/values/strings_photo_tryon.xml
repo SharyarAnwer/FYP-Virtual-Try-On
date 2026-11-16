@@ -1,0 +1,191 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photo Try-On (the still-photo module). Kept apart from strings.xml so the live try-on's file is untouched. -->
+<resources>
+    <string name="photo_tryon_app_name">Photo Try-On</string>
+
+    <!-- Setting up, with the wearer still at the phone -->
+    <string name="capture_setup_title">Photos for your try-on</string>
+    <string name="capture_setup_steps">1. Stand the phone upright, at about chest height.
+2. Turn the volume up: I will talk you through it.
+3. Choose how:
+   • Start: one front photo, then one slow turn to your left.
+   • Free poses: up to eight poses of your own. Stand, arms off your chest, hands out of your pockets, nothing in your hands.</string>
+    <string name="capture_start">Start: front photo and a turn</string>
+    <string name="capture_tilt_ok">Phone is upright</string>
+    <string name="capture_tilt_back">Phone is leaning back %1$d° — stand it more upright</string>
+    <string name="capture_tilt_forward">Phone is leaning forward %1$d° — stand it more upright</string>
+    <string name="capture_tilt_sideways">Phone is tilted to one side — straighten it</string>
+    <string name="capture_volume_ok">Volume is up</string>
+    <string name="capture_volume_low">Volume is low — turn it up so you can hear me from across the room</string>
+    <string name="capture_permission_needed">The camera is needed to take your photos. Allow it, then tap Start.</string>
+    <string name="capture_voice_start">Walk back about three big steps, and face the phone.</string>
+    <string name="capture_voice_help">If I can\'t see all of you, move the phone further away, or stand it more upright.</string>
+
+    <!-- Instructions: shown large on screen and spoken -->
+    <string name="capture_no_person">I can\'t see you. Stand in front of the phone.</string>
+    <string name="capture_move_away">Move further from the phone.</string>
+    <string name="capture_come_closer">Come a little closer to the phone.</string>
+    <string name="capture_move_left">Move a little to your left.</string>
+    <string name="capture_move_right">Move a little to your right.</string>
+    <string name="capture_step_forward">Take a small step forward.</string>
+    <string name="capture_step_backward">Take a small step backward.</string>
+    <string name="capture_face_phone">Face the phone.</string>
+    <string name="capture_turn_left_first">Turn to your left.</string>
+    <string name="capture_turn_left_back">Turn to your left again, so your back faces the phone.</string>
+    <string name="capture_turn_left_last">Turn to your left once more.</string>
+    <string name="capture_turn_left_more">Turn a little more to your left.</string>
+    <string name="capture_turn_right_back">Too far. Turn a little to your right.</string>
+    <string name="capture_look_at_phone">Look straight at the phone.</string>
+    <string name="capture_look_ahead">Look straight ahead, not at the phone.</string>
+    <string name="capture_lift_head">Lift your head.</string>
+    <string name="capture_stand_straight">Stand up straight.</string>
+    <string name="capture_arms_out">Move your arms a little away from your body.</string>
+    <string name="capture_arms_down">Lower your arms a little.</string>
+    <string name="capture_feet_apart">Move your feet a little apart.</string>
+    <string name="capture_feet_closer">Bring your feet a little closer together.</string>
+    <string name="capture_too_dark">It\'s too dark. Turn on a light, or face a window.</string>
+    <string name="capture_hold_still">Hold still.</string>
+    <string name="capture_taking">Taking the photo…</string>
+    <string name="capture_count_3">Three</string>
+    <string name="capture_count_2">Two</string>
+    <string name="capture_count_1">One</string>
+    <string name="capture_good">Good.</string>
+    <string name="capture_all_done">Stop. All eight done. You can come back to the phone.</string>
+    <string name="capture_failed">That photo did not save. Hold still and I will try again.</string>
+
+    <!-- The four steps along the top -->
+    <string name="capture_step_front">Front</string>
+    <string name="capture_step_right">Right side</string>
+    <string name="capture_step_back">Back</string>
+    <string name="capture_step_left">Left side</string>
+
+    <!-- Looking over the four photos -->
+    <string name="capture_review_title">Your eight views</string>
+    <string name="capture_retake">Retake all</string>
+    <string name="capture_use">Use these</string>
+    <string name="capture_saved">Saved four photos in %1$s</string>
+    <string name="capture_close">Close</string>
+    <string name="capture_use_last">Use my last photos</string>
+    <string name="capture_face_measuring">Look at the phone for a moment: measuring your face for scale</string>
+    <string name="capture_face_measured">Face measured for scale</string>
+
+    <!-- The profile read from the photos, and the outfits ranked for it -->
+    <string name="photo_profile_title">Your profile</string>
+    <string name="photo_profile_working">Measuring you from your photos…</string>
+    <string name="photo_profile_failed">I could not find you in the front photo. Retake the photos.</string>
+    <string name="photo_profile_measurements">Height %1$.0f cm\nShoulders %2$.0f cm\nChest %3$.0f cm · Waist %4$.0f cm · Hips %5$.0f cm\nArm %6$.0f cm · Leg %7$.0f cm</string>
+    <string name="photo_profile_build">Build: %1$s · Shirt size about %2$s</string>
+    <string name="photo_profile_skin">Skin tone: %1$s, %2$s undertone</string>
+    <string name="photo_profile_face">Face shape: %1$s</string>
+    <string name="photo_profile_note_average_eyes">Your face was not measured up close, so sizes assume an average eye spacing: about 1 part in 20 either way.</string>
+    <string name="photo_profile_note_no_side">No usable side photo: chest, waist and hips are rough.</string>
+    <string name="photo_profile_note_no_scale">No face found in the front photo: these figures assume a height of 170 cm. Only the proportions are yours.</string>
+    <string name="photo_profile_note_clothes">Loose clothes measure bigger than the body under them.</string>
+    <string name="photo_profile_outfits">Outfits for you</string>
+    <string name="photo_profile_try_on">Try on</string>
+    <string name="photo_profile_size">Size %1$s</string>
+    <string name="engine_title">Try-on engine</string>
+    <string name="engine_not_set">Not connected. Start the notebook on Kaggle, then paste its address here.</string>
+    <string name="engine_checking">Checking…</string>
+    <string name="engine_connected">Connected</string>
+    <string name="engine_unreachable">Not reachable: %1$s</string>
+    <string name="engine_set">Set address</string>
+    <string name="engine_hint">https://….trycloudflare.com/k/…</string>
+    <string name="engine_save">Save</string>
+    <string name="engine_cancel">Cancel</string>
+
+    <!-- An outfit's pieces arriving -->
+    <string name="result_front">Front</string>
+    <string name="result_right">Right</string>
+    <string name="result_back">Back</string>
+    <string name="result_left">Left</string>
+    <string name="result_3d">3D</string>
+    <string name="result_starting">Sending your photos to the engine…</string>
+    <string name="result_stage">%1$s…</string>
+    <string name="result_done">All your views are here. Drag to turn.</string>
+    <string name="result_saved">Shown from this phone\'s saved copy.</string>
+    <string name="result_3d_ready">Your 3D view is ready</string>
+    <string name="result_3d_shape">3D shape ready — colour is on its way</string>
+    <string name="result_error">Could not finish: %1$s</string>
+    <string name="result_consent">Your eight photos will be sent to the try-on engine running in your Kaggle account. Continue?</string>
+    <string name="result_send">Send</string>
+    <string name="photo_tryon_open">Photo try-on</string>
+    <string name="capture_turn_slowly">Now turn slowly to your left, all the way round. I will count each view out loud. Stop when I say stop.</string>
+    <string name="capture_turning">Keep turning slowly to your left. I will say stop.</string>
+    <string name="capture_slower">A little slower.</string>
+    <string name="capture_keep_turning">Keep turning to your left.</string>
+    <string name="capture_back">Back to live try-on</string>
+    <string name="result_hint">Drag left or right to turn</string>
+    <!-- Said as each view of the turn is taken; the front photo is the first. -->
+    <string-array name="capture_counts">
+        <item>One</item>
+        <item>Two</item>
+        <item>Three</item>
+        <item>Four</item>
+        <item>Five</item>
+        <item>Six</item>
+        <item>Seven</item>
+        <item>Eight</item>
+    </string-array>
+    <string name="capture_upload">Upload photos from phone</string>
+    <string name="capture_upload_title">Choose your photos</string>
+    <string name="capture_upload_steps">Choose 1 to 8 full-body photos of yourself, head to feet, one person in each: your front, your back, your sides, in any order.
+
+I sort them by which way you face, and you can check before going on.
+
+Fitted clothes in good light give the best results.</string>
+    <string name="capture_upload_choose">Choose photos</string>
+    <string name="capture_upload_working">Reading your photos…</string>
+    <string name="capture_upload_failed">Those photos could not be read. Try again, or take new ones.</string>
+    <string name="upload_sort_title">Check your photos</string>
+    <string name="upload_sort_working">Sorting your photos by which way you face…</string>
+    <string name="upload_sort_note">Sorted by which way you face. If one is in the wrong place, tap it, then tap where it belongs. ? means I could not tell. A red label is a pose that may dress badly.</string>
+    <string name="upload_sort_need_front">Put a photo in Front to continue: tap a photo, then tap Front.</string>
+    <string name="upload_sort_continue">Continue</string>
+    <string name="upload_sort_again">Choose again</string>
+    <!-- The eight places on the check screen, by which way the person faces. -->
+    <string-array name="upload_view_names">
+        <item>Front</item>
+        <item>Front, turned</item>
+        <item>Right side</item>
+        <item>Back, turned</item>
+        <item>Back</item>
+        <item>Back, turned</item>
+        <item>Left side</item>
+        <item>Front, turned</item>
+    </string-array>
+    <string name="capture_free">Free poses</string>
+    <string name="free_done">Done</string>
+    <string name="free_hold">Hold still in this pose for 3 seconds to take the photo.</string>
+    <string name="free_same_pose">Now change to a new pose.</string>
+    <string name="free_taken">Photo %1$d taken. Now change your pose.</string>
+    <string name="free_all_done">That is eight photos. All done. You can come back to the phone.</string>
+    <string name="free_start">Walk back about three big steps. Stand, and pose however you like.</string>
+    <string name="free_no_person">I can\'t see you. Stand in front of the phone.</string>
+    <string name="free_two_people">Only one person in the picture, please.</string>
+    <string name="free_not_standing">Please stand up straight.</string>
+    <string name="free_arms_on_body">Keep your arms by your sides, away from your chest.</string>
+    <string name="free_hands_hidden">Take your hands out of your pockets, and keep them in view.</string>
+    <string name="free_holding">Please put the %1$s down.</string>
+    <string name="check_not_standing">Not standing</string>
+    <string name="check_arms_on_body">Arms on body</string>
+    <string name="check_hands_hidden">Hands hidden</string>
+    <string name="check_holding">Holding a %1$s</string>
+    <string name="check_two_people">Two people</string>
+    <string name="check_cut_off">Body cut off</string>
+    <string name="check_too_far">Too far away</string>
+    <string name="check_no_person">No person found</string>
+    <!-- What a held thing is called out loud: object detector name, then the word to say. -->
+    <string-array name="holdable_names">
+        <item>cell phone|phone</item>
+        <item>handbag|bag</item>
+        <item>backpack|backpack</item>
+        <item>suitcase|suitcase</item>
+        <item>bottle|bottle</item>
+        <item>cup|cup</item>
+        <item>umbrella|umbrella</item>
+        <item>laptop|laptop</item>
+        <item>book|book</item>
+        <item>remote|remote</item>
+    </string-array>
+</resources>

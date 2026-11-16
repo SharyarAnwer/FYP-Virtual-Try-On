@@ -248,6 +248,10 @@ class MainActivity : AppCompatActivity() {
         binding.suggestionsButton.setOnClickListener {
             suggestionsScreen.launch(Intent(this, SuggestionsActivity::class.java))
         }
+        // The Photo Try-On module is a screen of its own; Back returns here.
+        binding.photoTryOnButton.setOnClickListener {
+            startActivity(Intent(this, com.shahryar.virtualtryon.phototryon.GuidedCaptureActivity::class.java))
+        }
         binding.faceShapeButton.setOnClickListener {
             if (measuringFace) {
                 profileAwaitsFace = false
