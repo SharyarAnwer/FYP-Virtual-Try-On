@@ -201,6 +201,14 @@ class MainActivity : AppCompatActivity() {
             view.updatePadding(top = bars.top, left = bars.left, right = bars.right)
             insets
         }
+        // The home cards sit above the navigation bar: its height is added to the panel's own bottom padding.
+        val homeBottom = binding.homePanel.paddingBottom
+        val homeSide = binding.homePanel.paddingLeft
+        ViewCompat.setOnApplyWindowInsetsListener(binding.homePanel) { view, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.updatePadding(left = homeSide + bars.left, right = homeSide + bars.right, bottom = homeBottom + bars.bottom)
+            insets
+        }
 
         analysisExecutor = Executors.newSingleThreadExecutor()
 
@@ -251,6 +259,10 @@ class MainActivity : AppCompatActivity() {
         // The Photo Try-On module is a screen of its own; Back returns here.
         binding.photoTryOnButton.setOnClickListener {
             startActivity(Intent(this, com.shahryar.virtualtryon.phototryon.GuidedCaptureActivity::class.java))
+        }
+        // The Video Try-On module is a screen of its own too; Back returns here.
+        binding.videoTryOnButton.setOnClickListener {
+            startActivity(Intent(this, com.shahryar.virtualtryon.videotryon.VideoCaptureActivity::class.java))
         }
         binding.faceShapeButton.setOnClickListener {
             if (measuringFace) {

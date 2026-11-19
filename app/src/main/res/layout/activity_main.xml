@@ -38,11 +38,13 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
 
+        <!-- Debug readout (FPS, latency). Hidden for now, not removed: delete visibility="gone" to show it. -->
         <TextView
             android:id="@+id/statsText"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="start|top"
+            android:visibility="gone"
             android:layout_margin="12dp"
             android:background="#A6000000"
             android:fontFamily="monospace"
@@ -53,13 +55,17 @@
             android:textSize="12sp"
             tools:text="FPS      29.8\nLATENCY   0.4 ms\nFRAME   480x640\nCAMERA     FRONT" />
 
+        <!-- The live try-on's controls. Hidden for now, not removed: delete visibility="gone" to show them all
+             again. (Photo try-on and Video try-on are the home cards at the bottom of the screen.) -->
         <LinearLayout
+            android:id="@+id/liveControls"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="end|top"
             android:layout_margin="12dp"
             android:gravity="end"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:visibility="gone">
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/switchButton"
@@ -67,14 +73,6 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/switch_camera" />
-
-            <!-- Opens the Photo Try-On module: still photos, dressed and shown as a turntable. -->
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/photoTryOnButton"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="8dp"
-                android:text="@string/photo_tryon_open" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/topButton"
@@ -165,6 +163,179 @@
                 tools:text="@string/mask_off" />
         </LinearLayout>
     </FrameLayout>
+
+
+    <!-- Home: the two ways to try clothes on, as cards at the bottom, over a dark fade on the camera picture.
+         The navigation bar's height is added to the bottom padding in MainActivity. -->
+    <LinearLayout
+        android:id="@+id/homePanel"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_home_scrim"
+        android:orientation="vertical"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="72dp"
+        android:paddingBottom="24dp"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/home_title"
+            android:textColor="@color/white"
+            android:textSize="30sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/home_subtitle"
+            android:textColor="@color/home_text_secondary"
+            android:textSize="15sp" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/photoTryOnButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:clickable="true"
+            android:contentDescription="@string/photo_tryon_open"
+            android:focusable="true"
+            app:cardBackgroundColor="@color/home_card"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="0dp"
+            app:rippleColor="@color/home_ripple"
+            app:strokeColor="@color/home_card_stroke"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="16dp">
+
+                <FrameLayout
+                    android:layout_width="52dp"
+                    android:layout_height="52dp"
+                    android:background="@drawable/bg_home_icon_photo">
+
+                    <ImageView
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_home_photo"
+                        app:tint="@color/home_accent_photo" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/photo_tryon_open"
+                        android:textColor="@color/white"
+                        android:textSize="18sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/home_photo_desc"
+                        android:textColor="@color/home_text_secondary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_home_chevron"
+                    app:tint="@color/home_text_hint" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/videoTryOnButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:clickable="true"
+            android:contentDescription="@string/video_tryon_open"
+            android:focusable="true"
+            app:cardBackgroundColor="@color/home_card"
+            app:cardCornerRadius="22dp"
+            app:cardElevation="0dp"
+            app:rippleColor="@color/home_ripple"
+            app:strokeColor="@color/home_card_stroke"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="16dp">
+
+                <FrameLayout
+                    android:layout_width="52dp"
+                    android:layout_height="52dp"
+                    android:background="@drawable/bg_home_icon_video">
+
+                    <ImageView
+                        android:layout_width="26dp"
+                        android:layout_height="26dp"
+                        android:layout_gravity="center"
+                        android:importantForAccessibility="no"
+                        android:src="@drawable/ic_home_video"
+                        app:tint="@color/home_accent_video" />
+                </FrameLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="16dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/video_tryon_open"
+                        android:textColor="@color/white"
+                        android:textSize="18sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="@string/home_video_desc"
+                        android:textColor="@color/home_text_secondary"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <ImageView
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
+                    android:importantForAccessibility="no"
+                    android:src="@drawable/ic_home_chevron"
+                    app:tint="@color/home_text_hint" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+    </LinearLayout>
 
     <!-- Guidance while the face shape is measured, then its result (M7). Outside the top bar, so
          tapping the picture to hide the buttons leaves it showing. -->

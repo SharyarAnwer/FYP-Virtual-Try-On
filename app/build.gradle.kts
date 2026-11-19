@@ -28,6 +28,8 @@ android {
             if (file.exists()) file.inputStream().use { stream -> load(stream) }
         }
         buildConfigField("String", "PHOTO_TRYON_ENGINE", "\"${localProps.getProperty("photoTryOnEngine", "")}\"")
+        // The Video Try-On engine: a separate Modal app with its own address (same key), also from local.properties.
+        buildConfigField("String", "VIDEO_TRYON_ENGINE", "\"${localProps.getProperty("videoTryOnEngine", "")}\"")
     }
 
     buildTypes {
@@ -69,6 +71,8 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    // Video Try-On: recording the 10-second video.
+    implementation(libs.androidx.camera.video)
 
     // MediaPipe Tasks — pose landmark detection (M1).
     implementation(libs.mediapipe.tasks.vision)

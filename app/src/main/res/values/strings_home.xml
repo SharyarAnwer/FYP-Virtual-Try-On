@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Home screen: the heading and the two try-on cards. The card titles are photo_tryon_open and video_tryon_open. -->
+<resources>
+    <string name="home_title">Try it on</string>
+    <string name="home_subtitle">See yourself in new clothes, from every side.</string>
+    <string name="home_photo_desc">Photos of you from every side, dressed</string>
+    <string name="home_video_desc">A 10-second video of you, dressed</string>
+</resources>

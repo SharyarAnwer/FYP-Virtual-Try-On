@@ -66,6 +66,19 @@
             android:exported="false"
             android:screenOrientation="portrait"
             tools:ignore="LockedOrientationActivity" />
+
+        <!-- Video Try-On: a short video of the wearer, dressed; opened from the main screen's Video try-on button. -->
+        <activity
+            android:name=".videotryon.VideoCaptureActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity" />
+        <activity
+            android:name=".videotryon.VideoDressActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity" />
     </application>
 
 </manifest>

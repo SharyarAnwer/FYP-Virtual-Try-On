@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Video try-on's screens. -->
+<resources>
+    <color name="video_accent_record">#FF5252</color>
+    <color name="video_accent_record_soft">#33FF5252</color>
+    <color name="video_button">#5C6BC0</color>
+    <color name="video_count_bg">#B3000000</color>
+</resources>

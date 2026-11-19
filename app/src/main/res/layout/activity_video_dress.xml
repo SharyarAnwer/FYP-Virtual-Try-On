@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Video Try-On, step 2: choose a top, a bottom or both; wait; watch the dressed video. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#080B10"
+    android:keepScreenOn="true">
+
+    <!-- Choosing the clothes. The two rows of garments are filled in code. -->
+    <LinearLayout
+        android:id="@+id/choosePanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingHorizontal="20dp"
+        android:paddingTop="28dp"
+        android:paddingBottom="16dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/video_choose_title"
+            android:textColor="@color/white"
+            android:textSize="28sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="@string/video_choose_note"
+            android:textColor="@color/home_text_secondary"
+            android:textSize="15sp" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:letterSpacing="0.08"
+            android:text="@string/video_choose_top_label"
+            android:textAllCaps="true"
+            android:textColor="@color/home_text_hint"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="8dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/topsRow"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:letterSpacing="0.08"
+            android:text="@string/video_choose_bottom_label"
+            android:textAllCaps="true"
+            android:textColor="@color/home_text_hint"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="8dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/bottomsRow"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="horizontal" />
+        </HorizontalScrollView>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/dressButton"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="16dp"
+            android:backgroundTint="@color/video_button"
+            android:enabled="false"
+            android:text="@string/video_dress"
+            android:textColor="@color/white"
+            android:textSize="17sp"
+            app:cornerRadius="18dp" />
+    </LinearLayout>
+
+    <!-- Waiting for the engine. -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/waitPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:layout_marginHorizontal="24dp"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/home_card"
+        app:cardCornerRadius="24dp"
+        app:cardElevation="0dp"
+        app:strokeColor="@color/home_card_stroke"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:orientation="vertical"
+            android:padding="28dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:letterSpacing="0.08"
+                android:text="@string/video_wait_title"
+                android:textAllCaps="true"
+                android:textColor="@color/home_text_hint"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.progressindicator.CircularProgressIndicator
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:indeterminate="true"
+                app:indicatorColor="@color/home_accent_video"
+                app:indicatorSize="64dp"
+                app:trackColor="@color/home_accent_video_soft"
+                app:trackThickness="5dp" />
+
+            <TextView
+                android:id="@+id/stageText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:gravity="center"
+                android:textColor="@color/white"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/elapsedText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:lineSpacingExtra="2dp"
+                android:textColor="@color/home_text_secondary"
+                android:textSize="14sp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/retryButton"
+                android:layout_width="wrap_content"
+                android:layout_height="52dp"
+                android:layout_marginTop="18dp"
+                android:backgroundTint="@color/video_button"
+                android:paddingHorizontal="28dp"
+                android:text="@string/video_try_again"
+                android:textColor="@color/white"
+                android:visibility="gone"
+                app:cornerRadius="16dp" />
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- The dressed video. -->
+    <LinearLayout
+        android:id="@+id/resultPanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="24dp"
+        android:paddingBottom="16dp"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="4dp"
+            android:text="@string/video_result_title"
+            android:textColor="@color/white"
+            android:textSize="26sp"
+            android:textStyle="bold" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_marginTop="14dp"
+            android:layout_weight="1"
+            app:cardBackgroundColor="#000000"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="0dp"
+            app:strokeColor="@color/home_card_stroke"
+            app:strokeWidth="1dp">
+
+            <VideoView
+                android:id="@+id/videoView"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center" />
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/toggleButton"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="12dp"
+            android:text="@string/video_show_original"
+            android:textColor="@color/white"
+            app:cornerRadius="16dp"
+            app:strokeColor="@color/home_card_stroke" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="horizontal">
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/otherClothesButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="0dp"
+                android:layout_height="52dp"
+                android:layout_marginEnd="6dp"
+                android:layout_weight="1"
+                android:text="@string/video_other_clothes"
+                android:textColor="@color/white"
+                app:cornerRadius="16dp"
+                app:strokeColor="@color/home_card_stroke" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/newVideoButton"
+                android:layout_width="0dp"
+                android:layout_height="52dp"
+                android:layout_marginStart="6dp"
+                android:layout_weight="1"
+                android:backgroundTint="@color/video_button"
+                android:text="@string/video_new"
+                android:textColor="@color/white"
+                app:cornerRadius="16dp" />
+        </LinearLayout>
+    </LinearLayout>
+</FrameLayout>

@@ -1,0 +1,331 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Video Try-On, step 1: record a 10-second video, or choose one from the phone. -->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#080B10"
+    android:keepScreenOn="true">
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- The countdown and the seconds left, big enough to read from across the room. -->
+    <TextView
+        android:id="@+id/countText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:background="@drawable/bg_video_count"
+        android:minWidth="120dp"
+        android:gravity="center"
+        android:paddingHorizontal="28dp"
+        android:paddingVertical="10dp"
+        android:textColor="@color/white"
+        android:textSize="56sp"
+        android:textStyle="bold"
+        android:visibility="gone" />
+
+    <!-- Before recording: how to stand the phone, then Start. -->
+    <com.google.android.material.card.MaterialCardView
+        android:id="@+id/recordPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:layout_margin="16dp"
+        android:visibility="gone"
+        app:cardBackgroundColor="@color/home_card"
+        app:cardCornerRadius="24dp"
+        app:cardElevation="0dp"
+        app:strokeColor="@color/home_card_stroke"
+        app:strokeWidth="1dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="18dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:lineSpacingExtra="3dp"
+                android:text="@string/video_record_hint"
+                android:textColor="@color/white"
+                android:textSize="15sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/cancelButton"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="0dp"
+                    android:layout_height="56dp"
+                    android:layout_marginEnd="6dp"
+                    android:layout_weight="1"
+                    android:text="@string/video_cancel"
+                    android:textColor="@color/white"
+                    app:cornerRadius="16dp"
+                    app:strokeColor="@color/home_card_stroke" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/startButton"
+                    android:layout_width="0dp"
+                    android:layout_height="56dp"
+                    android:layout_marginStart="6dp"
+                    android:layout_weight="1"
+                    android:backgroundTint="@color/video_accent_record"
+                    android:text="@string/video_start"
+                    android:textColor="@color/white"
+                    android:textSize="16sp"
+                    app:cornerRadius="16dp"
+                    app:icon="@drawable/ic_video_record"
+                    app:iconTint="@color/white" />
+            </LinearLayout>
+        </LinearLayout>
+    </com.google.android.material.card.MaterialCardView>
+
+    <!-- First: record or upload. -->
+    <FrameLayout
+        android:id="@+id/choicePanel"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@drawable/bg_setup_scrim">
+
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="bottom"
+                android:orientation="vertical"
+                android:paddingHorizontal="20dp"
+                android:paddingTop="40dp"
+                android:paddingBottom="12dp">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/video_title"
+                    android:textColor="@color/white"
+                    android:textSize="30sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="@string/video_subtitle"
+                    android:textColor="@color/home_text_secondary"
+                    android:textSize="15sp" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    app:cardBackgroundColor="@color/home_card"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:strokeColor="@color/home_card_stroke"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="16dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:letterSpacing="0.08"
+                            android:text="@string/video_how_title"
+                            android:textAllCaps="true"
+                            android:textColor="@color/home_text_hint"
+                            android:textSize="12sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:lineSpacingExtra="5dp"
+                            android:text="@string/video_how_steps"
+                            android:textColor="@color/home_text_secondary"
+                            android:textSize="14sp" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:letterSpacing="0.08"
+                    android:text="@string/video_ways_title"
+                    android:textAllCaps="true"
+                    android:textColor="@color/home_text_hint"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/recordButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:clickable="true"
+                    android:contentDescription="@string/video_record"
+                    android:focusable="true"
+                    app:cardBackgroundColor="@color/home_card"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:rippleColor="@color/home_ripple"
+                    app:strokeColor="@color/home_card_stroke"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="14dp">
+
+                        <FrameLayout
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:background="@drawable/bg_badge_record">
+
+                            <ImageView
+                                android:layout_width="20dp"
+                                android:layout_height="20dp"
+                                android:layout_gravity="center"
+                                android:importantForAccessibility="no"
+                                android:src="@drawable/ic_video_record"
+                                app:tint="@color/video_accent_record" />
+                        </FrameLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="14dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/video_record"
+                                android:textColor="@color/white"
+                                android:textSize="17sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="@string/video_record_desc"
+                                android:textColor="@color/home_text_secondary"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+
+                        <ImageView
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:layout_marginStart="8dp"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_home_chevron"
+                            app:tint="@color/home_text_hint" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <com.google.android.material.card.MaterialCardView
+                    android:id="@+id/uploadButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:clickable="true"
+                    android:contentDescription="@string/video_upload_title"
+                    android:focusable="true"
+                    app:cardBackgroundColor="@color/home_card"
+                    app:cardCornerRadius="20dp"
+                    app:cardElevation="0dp"
+                    app:rippleColor="@color/home_ripple"
+                    app:strokeColor="@color/home_card_stroke"
+                    app:strokeWidth="1dp">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal"
+                        android:padding="14dp">
+
+                        <FrameLayout
+                            android:layout_width="48dp"
+                            android:layout_height="48dp"
+                            android:background="@drawable/bg_home_icon_video">
+
+                            <ImageView
+                                android:layout_width="24dp"
+                                android:layout_height="24dp"
+                                android:layout_gravity="center"
+                                android:importantForAccessibility="no"
+                                android:src="@drawable/ic_video_library"
+                                app:tint="@color/home_accent_video" />
+                        </FrameLayout>
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="14dp"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/video_upload_title"
+                                android:textColor="@color/white"
+                                android:textSize="17sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="@string/video_upload_desc"
+                                android:textColor="@color/home_text_secondary"
+                                android:textSize="13sp" />
+                        </LinearLayout>
+
+                        <ImageView
+                            android:layout_width="22dp"
+                            android:layout_height="22dp"
+                            android:layout_marginStart="8dp"
+                            android:importantForAccessibility="no"
+                            android:src="@drawable/ic_home_chevron"
+                            app:tint="@color/home_text_hint" />
+                    </LinearLayout>
+                </com.google.android.material.card.MaterialCardView>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/backButton"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/video_back"
+                    android:textColor="@color/home_text_secondary" />
+            </LinearLayout>
+        </ScrollView>
+    </FrameLayout>
+</FrameLayout>

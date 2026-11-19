@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photo try-on's first screen: one accent per way of taking the photos. -->
+<resources>
+    <color name="photo_accent_free">#69F0AE</color>
+    <color name="photo_accent_free_soft">#3369F0AE</color>
+    <color name="photo_accent_last">#B0BEC5</color>
+    <color name="photo_accent_last_soft">#26B0BEC5</color>
+</resources>

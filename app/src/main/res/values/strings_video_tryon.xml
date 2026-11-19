@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Video Try-On: a short video of the wearer, dressed by the video engine. Kept apart from the other strings. -->
+<resources>
+    <string name="video_tryon_open">Video try-on</string>
+
+    <!-- Getting the video -->
+    <string name="video_title">Video try-on</string>
+    <string name="video_steps">Make a video of yourself, up to 10 seconds, head to feet. Move slowly: turn, raise an arm, walk a step.\n\nThen choose a top, a bottom or both, and see yourself wearing them.\n\nDressing takes a few minutes.</string>
+    <string name="video_record">Record 10 seconds</string>
+    <string name="video_upload">Upload a video (10 s max)</string>
+    <string name="video_back">Back</string>
+    <string name="video_record_hint">Stand the phone upright at chest height. Tap Start, then step back so the camera sees all of you.</string>
+    <string name="video_start">Start</string>
+    <string name="video_cancel">Cancel</string>
+    <string name="video_permission_needed">The camera is needed to record your video.</string>
+    <string name="video_say_step_back">Step back so I can see all of you, head to feet. Recording starts in a few seconds.</string>
+    <string name="video_say_recording">Recording. Move slowly.</string>
+    <string name="video_say_done">Done. You can come back to the phone.</string>
+    <string name="video_recording">Recording… %1$d</string>
+    <string name="video_record_failed">The recording did not save. Try again.</string>
+    <string name="video_too_long">That video is %1$d seconds long. Choose one of 10 seconds or less.</string>
+    <string name="video_too_short">That video is too short. Choose one of 3 to 10 seconds.</string>
+    <string name="video_unreadable">That video could not be read. Choose another one.</string>
+
+    <!-- Choosing the clothes and dressing -->
+    <string name="video_choose_title">Choose the clothes</string>
+    <string name="video_choose_note">A top, a bottom, or both.</string>
+    <string name="video_tops">Top</string>
+    <string name="video_bottoms">Bottom</string>
+    <string name="video_none">None</string>
+    <string name="video_dress">Dress me</string>
+    <string name="video_sending">Sending your video…</string>
+    <string name="video_stage">%1$s…</string>
+    <string name="video_elapsed">%1$d:%2$02d · usually 5 to 8 minutes. Keep this screen open.</string>
+    <string name="video_failed">Could not finish: %1$s</string>
+    <string name="video_try_again">Try again</string>
+    <string name="video_show_original">Show my video</string>
+    <string name="video_show_dressed">Show dressed</string>
+    <string name="video_other_clothes">Other clothes</string>
+    <string name="video_new">New video</string>
+    <string name="video_no_engine">The video engine\'s address is not set in this build.</string>
+</resources>

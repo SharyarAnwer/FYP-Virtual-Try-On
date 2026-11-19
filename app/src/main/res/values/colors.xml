@@ -2,4 +2,15 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+
+    <!-- Home screen: the two try-on cards over the camera. -->
+    <color name="home_card">#D9141922</color>
+    <color name="home_card_stroke">#29FFFFFF</color>
+    <color name="home_ripple">#33FFFFFF</color>
+    <color name="home_text_secondary">#B3FFFFFF</color>
+    <color name="home_text_hint">#80FFFFFF</color>
+    <color name="home_accent_photo">#FF8A65</color>
+    <color name="home_accent_photo_soft">#33FF8A65</color>
+    <color name="home_accent_video">#8C9EFF</color>
+    <color name="home_accent_video_soft">#338C9EFF</color>
 </resources>

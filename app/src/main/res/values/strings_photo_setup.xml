@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photo try-on's first screen: the heading, the checks and the ways to take the photos. -->
+<resources>
+    <string name="setup_subtitle">Choose how to take your photos. I will talk you through it.</string>
+    <string name="setup_checks_title">Before you start</string>
+    <string name="setup_checks_hint">Stand the phone upright at chest height, with the volume up.</string>
+    <string name="setup_ways_title">Take your photos</string>
+    <string name="setup_turn_title">Guided turn</string>
+    <string name="setup_turn_desc">A front photo, then one slow turn to your left. I count the views out loud.</string>
+    <string name="setup_free_title">Free poses</string>
+    <string name="setup_free_desc">Up to 8 poses of your own. I check each one: standing, arms off your chest, hands free.</string>
+    <string name="setup_upload_title">Upload from phone</string>
+    <string name="setup_upload_desc">1 to 8 full-body photos you already have, in any order.</string>
+    <string name="setup_last_title">Use my last photos</string>
+    <string name="setup_last_desc">Skip taking photos and use the ones from last time.</string>
+    <string name="setup_back">Back</string>
+</resources>

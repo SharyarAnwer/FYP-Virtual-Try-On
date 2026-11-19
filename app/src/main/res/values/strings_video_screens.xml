@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Video try-on's screens: headings, steps and card wording. -->
+<resources>
+    <string name="video_subtitle">See yourself move in new clothes.</string>
+    <string name="video_how_title">How it works</string>
+    <string name="video_how_steps">1.  Make a video of yourself, up to 10 seconds, head to feet. Move slowly: turn, raise an arm, take a step.\n2.  Choose a top, a bottom or both.\n3.  Wait a few minutes while it is dressed.</string>
+    <string name="video_ways_title">Get your video</string>
+    <string name="video_record_desc">Front camera. A spoken countdown gives you time to step back.</string>
+    <string name="video_upload_title">Upload a video</string>
+    <string name="video_upload_desc">Up to 10 seconds, with all of you in the picture.</string>
+    <string name="video_choose_top_label">Top</string>
+    <string name="video_choose_bottom_label">Bottom</string>
+    <string name="video_wait_title">Dressing your video</string>
+    <string name="video_result_title">Your try-on</string>
+</resources>

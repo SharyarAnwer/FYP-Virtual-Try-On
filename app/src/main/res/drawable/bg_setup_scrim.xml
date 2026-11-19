@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Photo try-on's first screen: the camera stays faintly visible at the top, the choices sit on dark below. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:angle="90"
+        android:centerColor="#E6080B10"
+        android:centerY="0.6"
+        android:endColor="#66000000"
+        android:startColor="#FA080B10" />
+</shape>
